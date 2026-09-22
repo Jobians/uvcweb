@@ -6,8 +6,10 @@
 # /third_party/libuvc
 /android/app/src/main/jniLibs/*/
 /android/app/build
+android/app/release.keystore
 /android/build
 /android/.gradle
 /android/local.properties
 *.iml
 .idea
+keystore.base64

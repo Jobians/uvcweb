@@ -58,7 +58,7 @@ jobs:
           name: uvcweb ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            # dist/apk-debug/*.apk
+            dist/apk-debug/*.apk
             dist/apk-release/*.apk
             dist/uvcweb-termux-*
-            # dist/uvcweb-linux-x86_64-bin
+            dist/uvcweb-linux-x86_64-bin

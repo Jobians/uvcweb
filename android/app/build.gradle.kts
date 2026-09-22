@@ -23,7 +23,12 @@ android {
 
   splits {
     abi {
-      isEnable = true
+      // Enable ABI splits only for Release tasks.
+      val tasks = gradle.startParameter.taskNames
+      isEnable = tasks.any {
+        it.contains("Release", ignoreCase = true)
+      }
+
       reset()
       include(
         "arm64-v8a",

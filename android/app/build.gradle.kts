@@ -49,10 +49,19 @@ android {
     }
   }
 
+  val hasCustomKeystore = !System.getenv("KEYSTORE_FILE").isNullOrEmpty()
+
   buildTypes {
     release {
       isMinifyEnabled = false
-      signingConfig = if (!System.getenv("KEYSTORE_FILE").isNullOrEmpty()) {
+      signingConfig = if (hasCustomKeystore) {
+        signingConfigs.getByName("release")
+      } else {
+        signingConfigs.getByName("debug")
+      }
+    }
+    debug {
+      signingConfig = if (hasCustomKeystore) {
         signingConfigs.getByName("release")
       } else {
         signingConfigs.getByName("debug")

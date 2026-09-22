@@ -70,7 +70,7 @@ jobs:
 
       - name: Cache native-deps
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: android/native-deps
           key: ${{ steps.key.outputs.key }}
@@ -121,7 +121,7 @@ jobs:
           ndk-version: r27c
 
       - name: Restore native-deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: android/native-deps
           key: ${{ needs.native-deps.outputs.cache-key }}

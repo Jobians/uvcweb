@@ -13,7 +13,10 @@ static RNG: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
 
 /// Good-enough random numbers for SSRCs, sequence numbers and session ids (no rand crate).
 pub fn rand_u32() -> u32 {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
     let mut x = RNG.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed) ^ t;
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -33,14 +36,30 @@ pub fn rtp_header(out: &mut Vec<u8>, marker: bool, pt: u8, seq: u16, ts: u32, ss
 
 /// Split one JPEG picture into RFC 2435 packets. `max_payload` is the RTP payload budget
 /// (JPEG headers included). Quantisation tables travel in the first packet of every frame (Q=255).
-pub fn packetize_jpeg(info: &JpegInfo, data: &[u8], ts: u32, ssrc: u32, seq: &mut u16, max_payload: usize) -> Vec<Vec<u8>> {
+pub fn packetize_jpeg(
+    info: &JpegInfo,
+    data: &[u8],
+    ts: u32,
+    ssrc: u32,
+    seq: &mut u16,
+    max_payload: usize,
+) -> Vec<Vec<u8>> {
     let scan = &data[info.scan_start..info.scan_end];
     let w8 = ((info.width as usize + 7) / 8) as u8;
     let h8 = ((info.height as usize + 7) / 8) as u8;
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut off = 0usize;
     loop {
-        let mut hdr: Vec<u8> = vec![0, (off >> 16) as u8, (off >> 8) as u8, off as u8, info.rtp_type, 255, w8, h8];
+        let mut hdr: Vec<u8> = vec![
+            0,
+            (off >> 16) as u8,
+            (off >> 8) as u8,
+            off as u8,
+            info.rtp_type,
+            255,
+            w8,
+            h8,
+        ];
         if info.rtp_type >= 64 {
             hdr.extend_from_slice(&info.dri.to_be_bytes());
             hdr.extend_from_slice(&[0xFF, 0xFF]); // F=1, L=1, count=0x3FFF: not aligned to restart intervals
@@ -69,7 +88,16 @@ pub fn packetize_jpeg(info: &JpegInfo, data: &[u8], ts: u32, ssrc: u32, seq: &mu
 
 /// Split interleaved little-endian S16 PCM into RTP L16 packets (network byte order, RFC 3551).
 /// `pos` / `pos0` are running sample-frame counters; the RTP timestamp is `base_ts + (pos - pos0)`.
-pub fn packetize_l16(pcm_le: &[u8], chans: usize, pos: u64, pos0: u64, base_ts: u32, ssrc: u32, seq: &mut u16, max_payload: usize) -> Vec<Vec<u8>> {
+pub fn packetize_l16(
+    pcm_le: &[u8],
+    chans: usize,
+    pos: u64,
+    pos0: u64,
+    base_ts: u32,
+    ssrc: u32,
+    seq: &mut u16,
+    max_payload: usize,
+) -> Vec<Vec<u8>> {
     let fb = 2 * chans.max(1);
     let per = (max_payload / fb).max(1);
     let n_frames = pcm_le.len() / fb;
@@ -102,7 +130,14 @@ pub fn ntp_from_unix_micros(us: i64) -> (u32, u32) {
 /// RTCP sender report followed by an SDES CNAME chunk (a valid compound packet).
 /// It tells receivers which RTP timestamp corresponds to which wall-clock time, which is
 /// how players line the audio and video streams up.
-pub fn sender_report(ssrc: u32, unix_us: i64, rtp_ts: u32, pkt_count: u32, octet_count: u32, cname: &str) -> Vec<u8> {
+pub fn sender_report(
+    ssrc: u32,
+    unix_us: i64,
+    rtp_ts: u32,
+    pkt_count: u32,
+    octet_count: u32,
+    cname: &str,
+) -> Vec<u8> {
     let (sec, frac) = ntp_from_unix_micros(unix_us);
     let mut p: Vec<u8> = Vec::with_capacity(48);
     p.extend_from_slice(&[0x80, 200, 0, 6]);

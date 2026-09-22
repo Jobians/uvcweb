@@ -61,12 +61,27 @@ pub fn start(handle: *mut UsbHandle, want_rate: u32, want_ch: u16) -> Result<(),
         None => return Err("no usable 16-bit PCM capture interface on this device".to_string()),
     };
     let rate = descriptors::pick_rate(&a, want_rate);
-    say!("USB audio: using if {} alt {} ep 0x{:02x}: {} Hz, {} ch, S16_LE", a.interface, a.alt, a.endpoint, rate, a.channels);
+    say!(
+        "USB audio: using if {} alt {} ep 0x{:02x}: {} Hz, {} ch, S16_LE",
+        a.interface,
+        a.alt,
+        a.endpoint,
+        rate,
+        a.channels
+    );
     if rate != want_rate {
-        say!("USB audio: card doesn't offer {} Hz, using {} Hz", want_rate, rate);
+        say!(
+            "USB audio: card doesn't offer {} Hz, using {} Hz",
+            want_rate,
+            rate
+        );
     }
     if a.channels as u16 != want_ch {
-        say!("USB audio: card is {} ch, using that instead of {}", a.channels, want_ch);
+        say!(
+            "USB audio: card is {} ch, using that instead of {}",
+            a.channels,
+            want_ch
+        );
     }
 
     unsafe {
@@ -79,9 +94,21 @@ pub fn start(handle: *mut UsbHandle, want_rate: u32, want_ch: u16) -> Result<(),
             } else {
                 ""
             };
-            return Err(format!("cannot claim interface {}: {}{}", iface, usb_err(r), hint));
+            return Err(format!(
+                "cannot claim interface {}: {}{}",
+                iface,
+                usb_err(r),
+                hint
+            ));
         }
-        let mut ctl = Ctl { handle, interface: iface, claimed: true, alt_set: false, xfers: Vec::new(), bufs: Vec::new() };
+        let mut ctl = Ctl {
+            handle,
+            interface: iface,
+            claimed: true,
+            alt_set: false,
+            xfers: Vec::new(),
+            bufs: Vec::new(),
+        };
 
         let r = libusb_set_interface_alt_setting(handle, iface, a.alt as c_int);
         if r < 0 {
@@ -93,10 +120,26 @@ pub fn start(handle: *mut UsbHandle, want_rate: u32, want_ch: u16) -> Result<(),
 
         if a.freq_ctl {
             // UAC1 SET_CUR SAMPLING_FREQ_CONTROL on the endpoint
-            let mut f = [(rate & 0xFF) as u8, ((rate >> 8) & 0xFF) as u8, ((rate >> 16) & 0xFF) as u8];
-            let r = libusb_control_transfer(handle, 0x22, 0x01, 0x0100, a.endpoint as u16, f.as_mut_ptr(), 3, 1000);
+            let mut f = [
+                (rate & 0xFF) as u8,
+                ((rate >> 8) & 0xFF) as u8,
+                ((rate >> 16) & 0xFF) as u8,
+            ];
+            let r = libusb_control_transfer(
+                handle,
+                0x22,
+                0x01,
+                0x0100,
+                a.endpoint as u16,
+                f.as_mut_ptr(),
+                3,
+                1000,
+            );
             if r < 0 {
-                say!("USB audio: setting sample rate failed ({}), continuing", usb_err(r));
+                say!(
+                    "USB audio: setting sample rate failed ({}), continuing",
+                    usb_err(r)
+                );
             }
         }
 
@@ -152,9 +195,17 @@ pub fn start(handle: *mut UsbHandle, want_rate: u32, want_ch: u16) -> Result<(),
             return Err(msg);
         }
         if let Some(h) = hub::try_global() {
-            h.set_audio_format(AudioFormat { rate, channels: a.channels as u16 });
+            h.set_audio_format(AudioFormat {
+                rate,
+                channels: a.channels as u16,
+            });
         }
-        say!("USB audio capture started ({} transfers x {} packets, {} bytes/packet)", ok, PKTS, a.max_packet);
+        say!(
+            "USB audio capture started ({} transfers x {} packets, {} bytes/packet)",
+            ok,
+            PKTS,
+            a.max_packet
+        );
         *CTL.lock().unwrap_or_else(|e| e.into_inner()) = Some(ctl);
     }
     Ok(())
@@ -198,7 +249,9 @@ pub fn stop() {
         }
         let mut g = active();
         if *g > 0 {
-            let (ng, _) = ACTIVE_CV.wait_timeout(g, Duration::from_millis(100)).unwrap_or_else(|e| e.into_inner());
+            let (ng, _) = ACTIVE_CV
+                .wait_timeout(g, Duration::from_millis(100))
+                .unwrap_or_else(|e| e.into_inner());
             g = ng;
         }
         let left = *g;
@@ -239,7 +292,10 @@ pub fn poll() {
         None => return,
     };
     if REARM_LOGS.fetch_add(1, Ordering::SeqCst) < 5 {
-        say!("USB audio: all transfers ended ({} bad packets) - re-arming", PKT_ERRORS.load(Ordering::SeqCst));
+        say!(
+            "USB audio: all transfers ended ({} bad packets) - re-arming",
+            PKT_ERRORS.load(Ordering::SeqCst)
+        );
     }
     for &t in &ctl.xfers {
         *active() += 1;

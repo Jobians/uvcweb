@@ -105,7 +105,10 @@ pub extern "C" fn Java_com_uvcweb_app_Native_stop(_env: *mut c_void, _class: *mu
 }
 
 #[no_mangle]
-pub extern "C" fn Java_com_uvcweb_app_Native_isRunning(_env: *mut c_void, _class: *mut c_void) -> u8 {
+pub extern "C" fn Java_com_uvcweb_app_Native_isRunning(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> u8 {
     if RUNNING.load(Ordering::SeqCst) {
         1
     } else {

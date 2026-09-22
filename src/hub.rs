@@ -74,7 +74,7 @@ pub struct Hub {
     audio: Mutex<AudioState>,
     audio_cv: Condvar,
     audio_fmt: OnceLock<AudioFormat>,
-    stop: AtomicBool,                    // per session: a library can be started again after stop
+    stop: AtomicBool, // per session: a library can be started again after stop
     threads: Mutex<Vec<JoinHandle<()>>>, // listener threads, joined on shutdown so ports are free again
 }
 
@@ -179,7 +179,13 @@ impl Hub {
             g.same = if same { g.same + 1 } else { 0 };
             let now = Instant::now();
             g.last_at = Some(now);
-            let frame = Arc::new(VideoFrame { seq: g.seq, data: d.to_vec(), width: w, height: h, at: now });
+            let frame = Arc::new(VideoFrame {
+                seq: g.seq,
+                data: d.to_vec(),
+                width: w,
+                height: h,
+                at: now,
+            });
             g.latest = Some(frame);
             g.total
         };
@@ -214,7 +220,10 @@ impl Hub {
             if now >= deadline {
                 return None;
             }
-            let (ng, _) = self.video_cv.wait_timeout(g, deadline - now).unwrap_or_else(|e| e.into_inner());
+            let (ng, _) = self
+                .video_cv
+                .wait_timeout(g, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
             g = ng;
         }
     }
@@ -248,7 +257,12 @@ impl Hub {
             g.next_pos += (data.len() / fb) as u64;
             g.bytes += data.len() as u64;
             g.queued += data.len();
-            g.chunks.push_back(Arc::new(AudioChunk { seq, pos, data: data.to_vec(), at: Instant::now() }));
+            g.chunks.push_back(Arc::new(AudioChunk {
+                seq,
+                pos,
+                data: data.to_vec(),
+                at: Instant::now(),
+            }));
             while g.queued > cap && g.chunks.len() > 1 {
                 if let Some(old) = g.chunks.pop_front() {
                     g.queued -= old.data.len();
@@ -296,7 +310,10 @@ impl Hub {
             if now >= deadline {
                 return None;
             }
-            let (ng, _) = self.audio_cv.wait_timeout(g, deadline - now).unwrap_or_else(|e| e.into_inner());
+            let (ng, _) = self
+                .audio_cv
+                .wait_timeout(g, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
             g = ng;
         }
     }

@@ -22,7 +22,11 @@ impl Protocol for Web {
         say!(
             "open http://127.0.0.1:{} in your browser{}",
             ctx.port,
-            if ctx.cfg.lan { " (also reachable from the LAN, no password)" } else { "" }
+            if ctx.cfg.lan {
+                " (also reachable from the LAN, no password)"
+            } else {
+                ""
+            }
         );
         let hub = ctx.hub.clone();
         serve_tcp(&ctx.hub, listener, move |s| client(s, &hub));
@@ -79,7 +83,12 @@ fn client(mut s: TcpStream, hub: &Arc<Hub>) {
         "/stream" => serve_stream(&mut s, hub),
         "/audio" => {
             if hub.audio_format().is_none() {
-                reply(&mut s, "503 Service Unavailable", "text/plain", b"audio not available\n");
+                reply(
+                    &mut s,
+                    "503 Service Unavailable",
+                    "text/plain",
+                    b"audio not available\n",
+                );
             } else {
                 serve_audio(&mut s, hub);
             }
@@ -90,7 +99,12 @@ fn client(mut s: TcpStream, hub: &Arc<Hub>) {
                 say!("snapshot served ({} bytes)", f.data.len());
             }
             None => {
-                reply(&mut s, "503 Service Unavailable", "text/plain", b"no frame yet\n");
+                reply(
+                    &mut s,
+                    "503 Service Unavailable",
+                    "text/plain",
+                    b"no frame yet\n",
+                );
                 say!("snapshot served (0 bytes)");
             }
         },
@@ -132,11 +146,19 @@ fn serve_stream(s: &mut TcpStream, hub: &Arc<Hub>) {
             Some(f) => f,
             None => continue,
         };
-        let part = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", f.data.len());
-        let res = s.write_all(part.as_bytes()).and_then(|_| s.write_all(&f.data)).and_then(|_| s.write_all(b"\r\n"));
+        let part = format!(
+            "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+            f.data.len()
+        );
+        let res = s
+            .write_all(part.as_bytes())
+            .and_then(|_| s.write_all(&f.data))
+            .and_then(|_| s.write_all(b"\r\n"));
         if let Err(e) = res {
             why = match e.kind() {
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => "send timeout (browser stalled)".to_string(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+                    "send timeout (browser stalled)".to_string()
+                }
                 _ => e.to_string(),
             };
             break;
@@ -144,7 +166,12 @@ fn serve_stream(s: &mut TcpStream, hub: &Arc<Hub>) {
         sent += 1;
     }
     hub.viewer_leave();
-    say!("viewer #{} disconnected after {} frames ({})", id, sent, why);
+    say!(
+        "viewer #{} disconnected after {} frames ({})",
+        id,
+        sent,
+        why
+    );
 }
 
 /// 44-byte WAV header with "infinite" length fields, for live PCM.
@@ -174,7 +201,9 @@ fn serve_audio(s: &mut TcpStream, hub: &Arc<Hub>) {
         None => return,
     };
     let head = "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
-    if s.write_all(head.as_bytes()).is_err() || s.write_all(&wav_header(fmt.rate, fmt.channels)).is_err() {
+    if s.write_all(head.as_bytes()).is_err()
+        || s.write_all(&wav_header(fmt.rate, fmt.channels)).is_err()
+    {
         return;
     }
     let mut next = hub.audio_live_edge(); // start at the live edge, not in the past

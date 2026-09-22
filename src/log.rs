@@ -46,7 +46,11 @@ pub fn init_file_from_env() {
 #[cfg(target_os = "android")]
 #[link(name = "log")]
 extern "C" {
-    fn __android_log_write(prio: i32, tag: *const std::os::raw::c_char, text: *const std::os::raw::c_char) -> i32;
+    fn __android_log_write(
+        prio: i32,
+        tag: *const std::os::raw::c_char,
+        text: *const std::os::raw::c_char,
+    ) -> i32;
 }
 
 #[cfg(target_os = "android")]

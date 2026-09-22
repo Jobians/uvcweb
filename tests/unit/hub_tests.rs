@@ -40,7 +40,10 @@ fn video_subscriber_skips_ahead() {
 #[test]
 fn audio_subscriber_is_live_and_gapless() {
     let h = Hub::new();
-    h.set_audio_format(AudioFormat { rate: 8000, channels: 1 });
+    h.set_audio_format(AudioFormat {
+        rate: 8000,
+        channels: 1,
+    });
     h.push_audio(&[0u8; 100]); // published before anyone subscribed
     let mut next = h.audio_live_edge();
     assert!(h.next_chunk(&mut next, Duration::from_millis(10)).is_none());
@@ -86,7 +89,10 @@ fn global_can_be_replaced_between_sessions() {
 #[test]
 fn audio_ring_drops_oldest() {
     let h = Hub::new();
-    h.set_audio_format(AudioFormat { rate: 100, channels: 1 }); // cap = 400 bytes
+    h.set_audio_format(AudioFormat {
+        rate: 100,
+        channels: 1,
+    }); // cap = 400 bytes
     for i in 0..20u8 {
         h.push_audio(&[i; 100]);
     }

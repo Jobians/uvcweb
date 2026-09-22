@@ -5,15 +5,15 @@ use crate::protocols;
 
 pub struct Config {
     pub fd: i32,
-    pub width: u32,           // 0 = use the card's default MJPEG mode
+    pub width: u32, // 0 = use the card's default MJPEG mode
     pub height: u32,
     pub fps: u32,
     pub audio: bool,
-    pub audio_rate: u32,      // preferred; the card's own rate wins if it differs
+    pub audio_rate: u32, // preferred; the card's own rate wins if it differs
     pub audio_channels: u16,
-    pub lan: bool,            // listen on all interfaces instead of loopback
-    pub protocols: Vec<(String, u16)>,   // chosen protocols with their ports
-    pub av_offset_ms: i32,    // RTSP: shift video timestamps later (+) / earlier (-)
+    pub lan: bool,                     // listen on all interfaces instead of loopback
+    pub protocols: Vec<(String, u16)>, // chosen protocols with their ports
+    pub av_offset_ms: i32,             // RTSP: shift video timestamps later (+) / earlier (-)
 }
 
 impl Config {
@@ -40,8 +40,12 @@ pub fn usage() -> String {
     s.push_str("usage: termux-usb -r -e \"./uvcweb [options]\" DEVICE\n\n");
     s.push_str("video / audio:\n");
     s.push_str("  -w W -h H -f FPS   MJPEG mode (default: the card's own default mode)\n");
-    s.push_str("  -a usb|off         audio from the card's USB audio interface (default) or none\n");
-    s.push_str("  -ar RATE -ac CH    preferred audio rate / channels (the card's own values win)\n\n");
+    s.push_str(
+        "  -a usb|off         audio from the card's USB audio interface (default) or none\n",
+    );
+    s.push_str(
+        "  -ar RATE -ac CH    preferred audio rate / channels (the card's own values win)\n\n",
+    );
     s.push_str("serving:\n");
     s.push_str("  -P LIST            protocols to serve, comma separated (default: web)\n");
     s.push_str("  -p [NAME=]PORT     port; use NAME=PORT when serving several protocols\n");
@@ -49,7 +53,10 @@ pub fn usage() -> String {
     s.push_str("  -o MS              RTSP audio/video offset in ms (+ = video later)\n\n");
     s.push_str("available protocols:\n");
     for p in protocols::REGISTRY {
-        s.push_str(&format!("  {:<6} {} (default port {})\n", p.name, p.about, p.default_port));
+        s.push_str(&format!(
+            "  {:<6} {} (default port {})\n",
+            p.name, p.about, p.default_port
+        ));
     }
     s.push_str("\nexamples:\n");
     s.push_str("  -w 640 -h 480 -f 30                 web viewer only\n");
@@ -67,7 +74,8 @@ fn take<'a>(args: &'a [String], i: &mut usize, last: usize, opt: &str) -> Result
 }
 
 fn num<T: std::str::FromStr>(s: &str, opt: &str) -> Result<T, String> {
-    s.parse::<T>().map_err(|_| format!("{}: bad number '{}'", opt, s))
+    s.parse::<T>()
+        .map_err(|_| format!("{}: bad number '{}'", opt, s))
 }
 
 pub fn parse(args: &[String]) -> Result<Config, String> {
@@ -96,7 +104,12 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
                 match v {
                     "usb" => cfg.audio = true,
                     "off" => cfg.audio = false,
-                    _ => return Err(format!("-a {}: only 'usb' (default) or 'off' are supported", v)),
+                    _ => {
+                        return Err(format!(
+                            "-a {}: only 'usb' (default) or 'off' are supported",
+                            v
+                        ))
+                    }
                 }
             }
             "-P" => {
@@ -107,7 +120,11 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
                         continue;
                     }
                     if protocols::find(&n).is_none() {
-                        return Err(format!("unknown protocol '{}' (available: {})", n, protocol_names()));
+                        return Err(format!(
+                            "unknown protocol '{}' (available: {})",
+                            n,
+                            protocol_names()
+                        ));
                     }
                     if !names.contains(&n) {
                         names.push(n);
@@ -132,7 +149,11 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
     for (pn, _) in &port_args {
         if let Some(n) = pn {
             if protocols::find(n).is_none() {
-                return Err(format!("-p {}=...: unknown protocol (available: {})", n, protocol_names()));
+                return Err(format!(
+                    "-p {}=...: unknown protocol (available: {})",
+                    n,
+                    protocol_names()
+                ));
             }
         }
     }
@@ -150,13 +171,19 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
                     if names.len() == 1 {
                         port = *p;
                     } else {
-                        return Err("-p PORT is ambiguous with several protocols; use -p NAME=PORT".to_string());
+                        return Err(
+                            "-p PORT is ambiguous with several protocols; use -p NAME=PORT"
+                                .to_string(),
+                        );
                     }
                 }
             }
         }
         if cfg.protocols.iter().any(|(_, existing)| *existing == port) {
-            return Err(format!("port {} is used by two protocols; set another with -p {}=PORT", port, n));
+            return Err(format!(
+                "port {} is used by two protocols; set another with -p {}=PORT",
+                port, n
+            ));
         }
         cfg.protocols.push((n.clone(), port));
     }
@@ -164,7 +191,11 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
 }
 
 fn protocol_names() -> String {
-    protocols::REGISTRY.iter().map(|p| p.name).collect::<Vec<_>>().join(", ")
+    protocols::REGISTRY
+        .iter()
+        .map(|p| p.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

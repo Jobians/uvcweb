@@ -35,11 +35,17 @@ impl Protocol for Rtsp {
         say!(
             "RTSP ready: rtsp://127.0.0.1:{}/live{}",
             ctx.port,
-            if ctx.cfg.lan { " (also reachable from the LAN, no password)" } else { "" }
+            if ctx.cfg.lan {
+                " (also reachable from the LAN, no password)"
+            } else {
+                ""
+            }
         );
         let hub = ctx.hub.clone();
         let cfg = ctx.cfg.clone();
-        serve_tcp(&ctx.hub, listener, move |s| handle_conn(s, hub.clone(), cfg.clone()));
+        serve_tcp(&ctx.hub, listener, move |s| {
+            handle_conn(s, hub.clone(), cfg.clone())
+        });
         Ok(())
     }
 }
@@ -55,8 +61,14 @@ struct Anchor {
 
 impl Anchor {
     fn now() -> Anchor {
-        let us = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_micros() as i64).unwrap_or(0);
-        Anchor { wall_us: us, inst: Instant::now() }
+        let us = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+        Anchor {
+            wall_us: us,
+            inst: Instant::now(),
+        }
     }
     /// t - anchor, in microseconds (negative if t is earlier).
     fn signed_micros(&self, t: Instant) -> i64 {
@@ -77,8 +89,17 @@ impl Anchor {
 // ---------------------------------------------------------------- output sinks
 
 enum Sink {
-    Tcp { wr: Arc<Mutex<TcpStream>>, rtp_ch: u8, rtcp_ch: u8 },
-    Udp { rtp: UdpSocket, rtcp: UdpSocket, peer_rtp: SocketAddr, peer_rtcp: SocketAddr },
+    Tcp {
+        wr: Arc<Mutex<TcpStream>>,
+        rtp_ch: u8,
+        rtcp_ch: u8,
+    },
+    Udp {
+        rtp: UdpSocket,
+        rtcp: UdpSocket,
+        peer_rtp: SocketAddr,
+        peer_rtcp: SocketAddr,
+    },
 }
 
 fn send_interleaved(wr: &Arc<Mutex<TcpStream>>, ch: u8, pkt: &[u8]) -> io::Result<()> {
@@ -102,7 +123,9 @@ impl Sink {
     fn send_rtcp(&self, pkt: &[u8]) -> io::Result<()> {
         match self {
             Sink::Tcp { wr, rtcp_ch, .. } => send_interleaved(wr, *rtcp_ch, pkt),
-            Sink::Udp { rtcp, peer_rtcp, .. } => rtcp.send_to(pkt, *peer_rtcp).map(|_| ()),
+            Sink::Udp {
+                rtcp, peer_rtcp, ..
+            } => rtcp.send_to(pkt, *peer_rtcp).map(|_| ()),
         }
     }
     fn kind(&self) -> &'static str {
@@ -142,7 +165,8 @@ fn video_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Ancho
                         warned_huff = true;
                     }
                     let ts = base.wrapping_add(anchor.ticks_90k(f.at) as u32);
-                    let pkts = rtp::packetize_jpeg(&info, &f.data, ts, ssrc, &mut seq, VIDEO_PAYLOAD);
+                    let pkts =
+                        rtp::packetize_jpeg(&info, &f.data, ts, ssrc, &mut seq, VIDEO_PAYLOAD);
                     for p in &pkts {
                         if sink.send_rtp(p).is_err() {
                             return;
@@ -157,7 +181,14 @@ fn video_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Ancho
         }
         if pkts_sent > 0 && now >= next_sr {
             let ts = base.wrapping_add(anchor.ticks_90k(now) as u32);
-            let sr = rtp::sender_report(ssrc, anchor.unix_us(now) + av_off_us, ts, pkts_sent, octets, "uvcweb");
+            let sr = rtp::sender_report(
+                ssrc,
+                anchor.unix_us(now) + av_off_us,
+                ts,
+                pkts_sent,
+                octets,
+                "uvcweb",
+            );
             if sink.send_rtcp(&sr).is_err() {
                 return;
             }
@@ -166,7 +197,13 @@ fn video_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Ancho
     }
 }
 
-fn audio_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Anchor, fmt: AudioFormat) {
+fn audio_sender(
+    hub: Arc<Hub>,
+    sink: Sink,
+    alive: Arc<AtomicBool>,
+    anchor: Anchor,
+    fmt: AudioFormat,
+) {
     let ssrc = rtp::rand_u32();
     let mut seq = rtp::rand_u32() as u16;
     let base = rtp::rand_u32();
@@ -181,7 +218,16 @@ fn audio_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Ancho
     while alive.load(Ordering::Relaxed) && !hub.is_stopped() {
         if let Some(c) = hub.next_chunk(&mut next, Duration::from_millis(500)) {
             let p0 = *pos0.get_or_insert(c.pos);
-            let pkts = rtp::packetize_l16(&c.data, chans, c.pos, p0, base, ssrc, &mut seq, AUDIO_PAYLOAD);
+            let pkts = rtp::packetize_l16(
+                &c.data,
+                chans,
+                c.pos,
+                p0,
+                base,
+                ssrc,
+                &mut seq,
+                AUDIO_PAYLOAD,
+            );
             for p in &pkts {
                 if sink.send_rtp(p).is_err() {
                     return;
@@ -189,7 +235,8 @@ fn audio_sender(hub: Arc<Hub>, sink: Sink, alive: Arc<AtomicBool>, anchor: Ancho
                 octets = octets.wrapping_add((p.len() - 12) as u32);
             }
             pkts_sent = pkts_sent.wrapping_add(pkts.len() as u32);
-            let end_rtp = base.wrapping_add((c.pos - p0 + (c.data.len() / frame_bytes) as u64) as u32);
+            let end_rtp =
+                base.wrapping_add((c.pos - p0 + (c.data.len() / frame_bytes) as u64) as u32);
             last_pair = Some((anchor.unix_us(c.at), end_rtp));
         }
         let now = Instant::now();
@@ -216,7 +263,10 @@ struct Request {
 impl Request {
     fn header(&self, name: &str) -> Option<&str> {
         let n = name.to_ascii_lowercase();
-        self.headers.iter().find(|(k, _)| *k == n).map(|(_, v)| v.as_str())
+        self.headers
+            .iter()
+            .find(|(k, _)| *k == n)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -269,8 +319,15 @@ fn read_request(r: &mut BufReader<TcpStream>) -> io::Result<Option<Request>> {
             headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
         }
     }
-    let req = Request { method, url, headers };
-    let clen = req.header("content-length").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+    let req = Request {
+        method,
+        url,
+        headers,
+    };
+    let clen = req
+        .header("content-length")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
     if clen > 0 {
         let mut body = vec![0u8; clen.min(65536)];
         r.read_exact(&mut body)?;
@@ -278,8 +335,18 @@ fn read_request(r: &mut BufReader<TcpStream>) -> io::Result<Option<Request>> {
     Ok(Some(req))
 }
 
-fn respond(wr: &Arc<Mutex<TcpStream>>, code: u16, reason: &str, cseq: &str, extra: &[(&str, String)], body: &[u8]) -> io::Result<()> {
-    let mut h = format!("RTSP/1.0 {} {}\r\nCSeq: {}\r\nServer: uvcweb\r\n", code, reason, cseq);
+fn respond(
+    wr: &Arc<Mutex<TcpStream>>,
+    code: u16,
+    reason: &str,
+    cseq: &str,
+    extra: &[(&str, String)],
+    body: &[u8],
+) -> io::Result<()> {
+    let mut h = format!(
+        "RTSP/1.0 {} {}\r\nCSeq: {}\r\nServer: uvcweb\r\n",
+        code, reason, cseq
+    );
     for (k, v) in extra {
         h.push_str(&format!("{}: {}\r\n", k, v));
     }
@@ -331,12 +398,18 @@ fn parse_transport(h: &str) -> Option<Chosen> {
         }
         let proto = toks.first().copied().unwrap_or("");
         if proto == "RTP/AVP/TCP" {
-            let pair = toks.iter().find_map(|t| t.strip_prefix("interleaved=")).and_then(parse_pair::<u8>);
+            let pair = toks
+                .iter()
+                .find_map(|t| t.strip_prefix("interleaved="))
+                .and_then(parse_pair::<u8>);
             let (a, b) = pair.unwrap_or((0, 1));
             return Some(Chosen::Tcp(a, b));
         }
         if proto == "RTP/AVP" || proto == "RTP/AVP/UDP" {
-            let pair = toks.iter().find_map(|t| t.strip_prefix("client_port=")).and_then(parse_pair::<u16>);
+            let pair = toks
+                .iter()
+                .find_map(|t| t.strip_prefix("client_port="))
+                .and_then(parse_pair::<u16>);
             if let Some((a, b)) = pair {
                 return Some(Chosen::Udp(a, b));
             }
@@ -348,7 +421,10 @@ fn parse_transport(h: &str) -> Option<Chosen> {
 /// `.../trackID=1` -> 1
 fn track_id(url: &str) -> Option<usize> {
     let i = url.rfind("trackID=")?;
-    let digits: String = url[i + 8..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = url[i + 8..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     digits.parse::<usize>().ok()
 }
 
@@ -362,7 +438,10 @@ fn bind_udp_pair() -> io::Result<(UdpSocket, UdpSocket, u16)> {
             }
         }
     }
-    Err(io::Error::new(io::ErrorKind::AddrInUse, "no free UDP port pair"))
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        "no free UDP port pair",
+    ))
 }
 
 // ---------------------------------------------------------------- one client connection
@@ -384,7 +463,11 @@ fn handle_setup(
     let (sink, transport) = match parse_transport(&offer) {
         None => return respond(wr, 461, "Unsupported Transport", cseq, &[], b""),
         Some(Chosen::Tcp(a, b)) => (
-            Sink::Tcp { wr: Arc::clone(wr), rtp_ch: a, rtcp_ch: b },
+            Sink::Tcp {
+                wr: Arc::clone(wr),
+                rtp_ch: a,
+                rtcp_ch: b,
+            },
             format!("RTP/AVP/TCP;unicast;interleaved={}-{}", a, b),
         ),
         Some(Chosen::Udp(a, b)) => match bind_udp_pair() {
@@ -395,16 +478,38 @@ fn handle_setup(
                     peer_rtp: SocketAddr::new(peer.ip(), a),
                     peer_rtcp: SocketAddr::new(peer.ip(), b),
                 },
-                format!("RTP/AVP;unicast;client_port={}-{};server_port={}-{}", a, b, sp, sp + 1),
+                format!(
+                    "RTP/AVP;unicast;client_port={}-{};server_port={}-{}",
+                    a,
+                    b,
+                    sp,
+                    sp + 1
+                ),
             ),
             Err(_) => return respond(wr, 500, "Internal Server Error", cseq, &[], b""),
         },
     };
     sinks[tid] = Some(sink);
-    respond(wr, 200, "OK", cseq, &[("Transport", transport), ("Session", format!("{};timeout=60", session))], b"")
+    respond(
+        wr,
+        200,
+        "OK",
+        cseq,
+        &[
+            ("Transport", transport),
+            ("Session", format!("{};timeout=60", session)),
+        ],
+        b"",
+    )
 }
 
-fn start_senders(hub: &Arc<Hub>, cfg: &Config, alive: &Arc<AtomicBool>, sinks: &mut [Option<Sink>; 2], audio: Option<AudioFormat>) {
+fn start_senders(
+    hub: &Arc<Hub>,
+    cfg: &Config,
+    alive: &Arc<AtomicBool>,
+    sinks: &mut [Option<Sink>; 2],
+    audio: Option<AudioFormat>,
+) {
     let anchor = Anchor::now();
     if let Some(sink) = sinks[0].take() {
         let h = Arc::clone(hub);
@@ -455,39 +560,78 @@ fn handle_conn(stream: TcpStream, hub: Arc<Hub>, cfg: Arc<Config>) {
                 200,
                 "OK",
                 &cseq,
-                &[("Public", "OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER".to_string())],
+                &[(
+                    "Public",
+                    "OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER"
+                        .to_string(),
+                )],
                 b"",
             ),
             "DESCRIBE" => {
-                let base = if req.url.ends_with('/') { req.url.clone() } else { format!("{}/", req.url) };
+                let base = if req.url.ends_with('/') {
+                    req.url.clone()
+                } else {
+                    format!("{}/", req.url)
+                };
                 let sdp = build_sdp(audio);
                 respond(
                     &wr,
                     200,
                     "OK",
                     &cseq,
-                    &[("Content-Base", base), ("Content-Type", "application/sdp".to_string())],
+                    &[
+                        ("Content-Base", base),
+                        ("Content-Type", "application/sdp".to_string()),
+                    ],
                     sdp.as_bytes(),
                 )
             }
-            "SETUP" => handle_setup(&req, &cseq, &wr, peer, audio.is_some(), &session, &mut sinks),
+            "SETUP" => handle_setup(
+                &req,
+                &cseq,
+                &wr,
+                peer,
+                audio.is_some(),
+                &session,
+                &mut sinks,
+            ),
             "PLAY" => {
                 if !playing && sinks.iter().all(|s| s.is_none()) {
                     respond(&wr, 455, "Method Not Valid in This State", &cseq, &[], b"")
                 } else {
                     // answer first, then start sending, so the response is never preceded by RTP data
-                    let r = respond(&wr, 200, "OK", &cseq, &[("Range", "npt=0.000-".to_string()), ("Session", session.clone())], b"");
+                    let r = respond(
+                        &wr,
+                        200,
+                        "OK",
+                        &cseq,
+                        &[
+                            ("Range", "npt=0.000-".to_string()),
+                            ("Session", session.clone()),
+                        ],
+                        b"",
+                    );
                     if r.is_ok() && !playing {
                         playing = true;
-                        let kinds: Vec<&str> = sinks.iter().filter_map(|s| s.as_ref().map(|k| k.kind())).collect();
-                        say!("rtsp: client {} playing ({} track(s) over {})", peer, kinds.len(), kinds.first().copied().unwrap_or("?"));
+                        let kinds: Vec<&str> = sinks
+                            .iter()
+                            .filter_map(|s| s.as_ref().map(|k| k.kind()))
+                            .collect();
+                        say!(
+                            "rtsp: client {} playing ({} track(s) over {})",
+                            peer,
+                            kinds.len(),
+                            kinds.first().copied().unwrap_or("?")
+                        );
                         start_senders(&hub, &cfg, &alive, &mut sinks, audio);
                     }
                     r
                 }
             }
             // A live picture cannot be paused; we accept the request and keep streaming.
-            "PAUSE" | "GET_PARAMETER" | "SET_PARAMETER" => respond(&wr, 200, "OK", &cseq, &[("Session", session.clone())], b""),
+            "PAUSE" | "GET_PARAMETER" | "SET_PARAMETER" => {
+                respond(&wr, 200, "OK", &cseq, &[("Session", session.clone())], b"")
+            }
             "TEARDOWN" => {
                 teardown = true;
                 respond(&wr, 200, "OK", &cseq, &[("Session", session.clone())], b"")

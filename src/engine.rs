@@ -73,7 +73,10 @@ impl Engine {
 
         let session = hub.clone();
         let supervisor = std::thread::spawn(move || supervise(session, cap));
-        Ok(Engine { hub, supervisor: Some(supervisor) })
+        Ok(Engine {
+            hub,
+            supervisor: Some(supervisor),
+        })
     }
 
     /// Stop everything and wait until the ports are free and the camera is released.
@@ -136,7 +139,10 @@ fn supervise(hub: Arc<Hub>, mut cap: Capture) {
                 stalled = false;
             }
             if st.same >= 90 && !flagged_same {
-                say!("last {} frames are identical: static picture or 'no signal' screen", st.same);
+                say!(
+                    "last {} frames are identical: static picture or 'no signal' screen",
+                    st.same
+                );
                 flagged_same = true;
             } else if st.same == 0 && flagged_same {
                 say!("picture is changing again");
@@ -176,7 +182,11 @@ fn supervise(hub: Arc<Hub>, mut cap: Capture) {
         let quiet = t.saturating_duration_since(last_act).as_secs_f64();
         if quiet > 4.0 {
             restarts += 1;
-            say!("no video for {:.0}s - restarting stream (restart #{})", quiet, restarts);
+            say!(
+                "no video for {:.0}s - restarting stream (restart #{})",
+                quiet,
+                restarts
+            );
             if let Err(e) = cap.restart() {
                 say!("restart failed: {}", e);
             }

@@ -8,7 +8,10 @@ use std::net::Shutdown;
 
 #[test]
 fn sdp_matches_the_ffmpeg_tested_reference() {
-    let got = build_sdp(Some(AudioFormat { rate: 96000, channels: 1 }));
+    let got = build_sdp(Some(AudioFormat {
+        rate: 96000,
+        channels: 1,
+    }));
     let want = "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=uvcweb\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\na=control:*\r\na=range:npt=0-\r\n\
 m=video 0 RTP/AVP 26\r\na=rtpmap:26 JPEG/90000\r\na=control:trackID=0\r\n\
 m=audio 0 RTP/AVP 97\r\na=rtpmap:97 L16/96000/1\r\na=control:trackID=1\r\n";
@@ -57,10 +60,14 @@ fn loopback_pair() -> (TcpStream, TcpStream) {
 fn request_parser_skips_interleaved_frames() {
     let (mut c, s) = loopback_pair();
     c.write_all(b"$\x00\x00\x04abcd").unwrap(); // an RTCP receiver report from the client
-    c.write_all(b"OPTIONS rtsp://x/live RTSP/1.0\r\nCSeq: 5\r\nUser-Agent: t\r\n\r\n").unwrap();
+    c.write_all(b"OPTIONS rtsp://x/live RTSP/1.0\r\nCSeq: 5\r\nUser-Agent: t\r\n\r\n")
+        .unwrap();
     let mut rd = BufReader::new(s);
     let r = read_request(&mut rd).unwrap().unwrap();
-    assert_eq!((r.method.as_str(), r.url.as_str(), r.header("CSeq")), ("OPTIONS", "rtsp://x/live", Some("5")));
+    assert_eq!(
+        (r.method.as_str(), r.url.as_str(), r.header("CSeq")),
+        ("OPTIONS", "rtsp://x/live", Some("5"))
+    );
     c.shutdown(Shutdown::Both).unwrap();
     assert!(read_request(&mut rd).unwrap().is_none());
 }
@@ -102,7 +109,10 @@ fn exchange(c: &mut TcpStream, rd: &mut BufReader<TcpStream>, req: &str) -> (Str
 #[test]
 fn end_to_end_tcp_session() {
     let hub = Hub::new();
-    hub.set_audio_format(AudioFormat { rate: 8000, channels: 1 });
+    hub.set_audio_format(AudioFormat {
+        rate: 8000,
+        channels: 1,
+    });
     let cfg = Arc::new(Config {
         fd: 0,
         width: 0,
@@ -115,8 +125,18 @@ fn end_to_end_tcp_session() {
         protocols: vec![],
         av_offset_ms: 0,
     });
-    let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    Rtsp.start(Ctx { hub: hub.clone(), cfg, bind: "127.0.0.1".parse().unwrap(), port }).unwrap();
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    Rtsp.start(Ctx {
+        hub: hub.clone(),
+        cfg,
+        bind: "127.0.0.1".parse().unwrap(),
+        port,
+    })
+    .unwrap();
 
     // a feeder standing in for the camera and the USB audio
     let feed_hub = hub.clone();
@@ -137,15 +157,31 @@ fn end_to_end_tcp_session() {
     c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut rd = BufReader::new(c.try_clone().unwrap());
     let base = format!("rtsp://127.0.0.1:{}/live", port);
-    let (h, body) = exchange(&mut c, &mut rd, &format!("DESCRIBE {} RTSP/1.0\r\nCSeq: 1\r\n\r\n", base));
+    let (h, body) = exchange(
+        &mut c,
+        &mut rd,
+        &format!("DESCRIBE {} RTSP/1.0\r\nCSeq: 1\r\n\r\n", base),
+    );
     assert!(h.starts_with("RTSP/1.0 200 OK"), "{}", h);
     let sdp = String::from_utf8(body).unwrap();
-    assert!(sdp.contains("m=video 0 RTP/AVP 26") && sdp.contains("L16/8000/1"), "{}", sdp);
+    assert!(
+        sdp.contains("m=video 0 RTP/AVP 26") && sdp.contains("L16/8000/1"),
+        "{}",
+        sdp
+    );
     let (h, _) = exchange(&mut c, &mut rd, &format!("SETUP {}/trackID=0 RTSP/1.0\r\nCSeq: 2\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n", base));
-    assert!(h.contains("interleaved=0-1") && h.contains("Session:"), "{}", h);
+    assert!(
+        h.contains("interleaved=0-1") && h.contains("Session:"),
+        "{}",
+        h
+    );
     let (h, _) = exchange(&mut c, &mut rd, &format!("SETUP {}/trackID=1 RTSP/1.0\r\nCSeq: 3\r\nTransport: RTP/AVP/TCP;unicast;interleaved=2-3\r\n\r\n", base));
     assert!(h.contains("interleaved=2-3"), "{}", h);
-    let (h, _) = exchange(&mut c, &mut rd, &format!("PLAY {} RTSP/1.0\r\nCSeq: 4\r\n\r\n", base));
+    let (h, _) = exchange(
+        &mut c,
+        &mut rd,
+        &format!("PLAY {} RTSP/1.0\r\nCSeq: 4\r\n\r\n", base),
+    );
     assert!(h.starts_with("RTSP/1.0 200 OK"), "{}", h);
 
     // read interleaved frames until we have seen video, audio and both sender reports
@@ -181,8 +217,19 @@ fn end_to_end_tcp_session() {
             break;
         }
     }
-    assert!(video >= 3 && audio >= 3 && sr_v && sr_a, "video {} audio {} sr {} {}", video, audio, sr_v, sr_a);
-    let (h, _) = exchange(&mut c, &mut rd, &format!("TEARDOWN {} RTSP/1.0\r\nCSeq: 5\r\n\r\n", base));
+    assert!(
+        video >= 3 && audio >= 3 && sr_v && sr_a,
+        "video {} audio {} sr {} {}",
+        video,
+        audio,
+        sr_v,
+        sr_a
+    );
+    let (h, _) = exchange(
+        &mut c,
+        &mut rd,
+        &format!("TEARDOWN {} RTSP/1.0\r\nCSeq: 5\r\n\r\n", base),
+    );
     assert!(h.starts_with("RTSP/1.0 200 OK"), "{}", h);
     feeder.join().unwrap();
 }

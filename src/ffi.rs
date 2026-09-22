@@ -117,7 +117,10 @@ extern "C" {
     pub fn libusb_set_option(ctx: *mut c_void, option: c_int, ...) -> c_int;
     pub fn libusb_error_name(code: c_int) -> *const c_char;
     pub fn libusb_get_device(h: *mut UsbHandle) -> *mut UsbDevice;
-    pub fn libusb_get_active_config_descriptor(dev: *mut UsbDevice, out: *mut *mut ConfigDescriptor) -> c_int;
+    pub fn libusb_get_active_config_descriptor(
+        dev: *mut UsbDevice,
+        out: *mut *mut ConfigDescriptor,
+    ) -> c_int;
     pub fn libusb_free_config_descriptor(cfg: *mut ConfigDescriptor);
     pub fn libusb_claim_interface(h: *mut UsbHandle, iface: c_int) -> c_int;
     pub fn libusb_release_interface(h: *mut UsbHandle, iface: c_int) -> c_int;

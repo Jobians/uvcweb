@@ -22,7 +22,14 @@ fn uvc_default_mode() {
     extra.extend(frame_desc(1, 1920, 1080, 333333));
     extra.extend(frame_desc(2, 1280, 720, 166666));
     extra.extend(frame_desc(3, 640, 480, 333333));
-    let alts = vec![RawAlt { interface: 1, alt: 0, class: 14, subclass: 2, endpoints: vec![], extra }];
+    let alts = vec![RawAlt {
+        interface: 1,
+        alt: 0,
+        class: 14,
+        subclass: 2,
+        endpoints: vec![],
+        extra,
+    }];
     let modes = mjpeg_modes(&alts);
     assert_eq!(modes.len(), 3);
     assert_eq!(default_mode(&modes), Some((1280, 720, 60)));
@@ -31,7 +38,14 @@ fn uvc_default_mode() {
 #[test]
 fn uvc_no_mjpeg() {
     let extra = vec![11, 0x24, 0x04, 1, 3, 0, 0, 0, 0, 0, 0]; // uncompressed only
-    let alts = vec![RawAlt { interface: 1, alt: 0, class: 14, subclass: 2, endpoints: vec![], extra }];
+    let alts = vec![RawAlt {
+        interface: 1,
+        alt: 0,
+        class: 14,
+        subclass: 2,
+        endpoints: vec![],
+        extra,
+    }];
     assert!(default_mode(&mjpeg_modes(&alts)).is_none());
 }
 
@@ -41,14 +55,33 @@ fn ms2109_like() -> Vec<RawAlt> {
     let mut extra = vec![7, 0x24, 0x01, 1, 1, 1, 0]; // AS_GENERAL, PCM
     extra.extend_from_slice(&[11, 0x24, 0x02, 1, 1, 2, 16, 1, 0x00, 0x77, 0x01]); // FORMAT_TYPE_I, 96000
     vec![
-        RawAlt { interface: 2, alt: 0, class: 1, subclass: 1, endpoints: vec![], extra: vec![] },
-        RawAlt { interface: 3, alt: 0, class: 1, subclass: 2, endpoints: vec![], extra: vec![] },
+        RawAlt {
+            interface: 2,
+            alt: 0,
+            class: 1,
+            subclass: 1,
+            endpoints: vec![],
+            extra: vec![],
+        },
+        RawAlt {
+            interface: 3,
+            alt: 0,
+            class: 1,
+            subclass: 2,
+            endpoints: vec![],
+            extra: vec![],
+        },
         RawAlt {
             interface: 3,
             alt: 1,
             class: 1,
             subclass: 2,
-            endpoints: vec![RawEndpoint { address: 0x82, attributes: 0x05, max_packet: 256, extra: vec![7, 0x25, 1, 0, 0, 0, 0] }],
+            endpoints: vec![RawEndpoint {
+                address: 0x82,
+                attributes: 0x05,
+                max_packet: 256,
+                extra: vec![7, 0x25, 1, 0, 0, 0, 0],
+            }],
             extra,
         },
     ]
@@ -59,8 +92,14 @@ fn audio_alt_parsing_matches_real_card() {
     let alts = audio_alts(&ms2109_like());
     assert_eq!(alts.len(), 1);
     let a = &alts[0];
-    assert_eq!((a.interface, a.alt, a.endpoint, a.max_packet), (3, 1, 0x82, 256));
-    assert_eq!((a.channels, a.subframe, a.bits, a.pcm, a.freq_ctl), (1, 2, 16, true, false));
+    assert_eq!(
+        (a.interface, a.alt, a.endpoint, a.max_packet),
+        (3, 1, 0x82, 256)
+    );
+    assert_eq!(
+        (a.channels, a.subframe, a.bits, a.pcm, a.freq_ctl),
+        (1, 2, 16, true, false)
+    );
     assert_eq!(a.rates, vec![96000]);
     // the card only does 96 kHz mono, whatever we ask for
     let c = choose_audio(&alts, 48000, 2).unwrap();
@@ -94,7 +133,12 @@ fn malformed_descriptors_do_not_panic() {
         alt: 1,
         class: 1,
         subclass: 2,
-        endpoints: vec![RawEndpoint { address: 0x82, attributes: 5, max_packet: 100, extra: vec![9] }],
+        endpoints: vec![RawEndpoint {
+            address: 0x82,
+            attributes: 5,
+            max_packet: 100,
+            extra: vec![9],
+        }],
         extra: vec![200, 0x24, 2, 1, 1, 2, 16, 3], // length runs past the end
     }];
     let a = audio_alts(&alts);

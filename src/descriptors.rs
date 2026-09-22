@@ -46,7 +46,11 @@ pub unsafe fn read_active_config(h: *mut UsbHandle) -> Result<Vec<RawAlt>, Strin
     let mut out = Vec::new();
     for i in 0..c.b_num_interfaces as usize {
         let itf = &*c.interface.add(i);
-        let n_alt = if itf.num_altsetting > 0 { itf.num_altsetting as usize } else { 0 };
+        let n_alt = if itf.num_altsetting > 0 {
+            itf.num_altsetting as usize
+        } else {
+            0
+        };
         for j in 0..n_alt {
             let ad = &*itf.altsetting.add(j);
             let mut endpoints = Vec::new();
@@ -150,8 +154,15 @@ pub fn mjpeg_modes(alts: &[RawAlt]) -> Vec<MjpegMode> {
 
 /// The card's own default mode: (width, height, fps).
 pub fn default_mode(modes: &[MjpegMode]) -> Option<(u32, u32, u32)> {
-    let m = modes.iter().find(|m| m.is_default).or_else(|| modes.first())?;
-    let fps = if m.interval > 0 { 10_000_000 / m.interval } else { 30 };
+    let m = modes
+        .iter()
+        .find(|m| m.is_default)
+        .or_else(|| modes.first())?;
+    let fps = if m.interval > 0 {
+        10_000_000 / m.interval
+    } else {
+        30
+    };
     Some((m.width, m.height, fps))
 }
 
@@ -272,7 +283,13 @@ pub fn pick_rate(a: &AudioAlt, want: u32) -> u32 {
 pub fn choose_audio(alts: &[AudioAlt], want_rate: u32, want_ch: u16) -> Option<&AudioAlt> {
     let mut best: Option<(&AudioAlt, u32)> = None;
     for a in alts {
-        if !a.pcm || a.subframe != 2 || a.bits != 16 || a.channels < 1 || a.channels > 2 || a.max_packet == 0 {
+        if !a.pcm
+            || a.subframe != 2
+            || a.bits != 16
+            || a.channels < 1
+            || a.channels > 2
+            || a.max_packet == 0
+        {
             continue;
         }
         let mut score = 1u32;

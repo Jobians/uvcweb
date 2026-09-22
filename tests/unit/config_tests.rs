@@ -19,7 +19,10 @@ fn default_is_web_on_8080() {
 #[test]
 fn several_protocols_and_ports() {
     let c = parse(&a("uvcweb -P web,rtsp -p rtsp=9000 -l 7")).unwrap();
-    assert_eq!(c.protocols, vec![("web".to_string(), 8080), ("rtsp".to_string(), 9000)]);
+    assert_eq!(
+        c.protocols,
+        vec![("web".to_string(), 8080), ("rtsp".to_string(), 9000)]
+    );
     assert!(c.lan);
     assert!(parse(&a("uvcweb -P web,rtsp -p 9000 7")).is_err());
     assert!(parse(&a("uvcweb -P nope 7")).is_err());

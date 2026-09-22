@@ -88,7 +88,9 @@ where
                     let h = Arc::clone(&handler);
                     thread::spawn(move || (*h)(stream));
                 }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(50)),
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(50))
+                }
                 Err(_) => thread::sleep(Duration::from_millis(200)),
             }
         }

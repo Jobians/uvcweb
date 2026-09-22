@@ -2,6 +2,7 @@
 //! Mirrors `analyze_jpeg` of the ffmpeg-verified Python reference.
 
 pub struct JpegInfo {
+    #[allow(dead_code)]
     pub width: u16,
     pub height: u16,
     /// RFC 2435 type: 0 = 4:2:2, 1 = 4:2:0, +64 when the stream uses restart markers
@@ -204,7 +205,7 @@ pub fn analyze(d: &[u8]) -> Result<JpegInfo, String> {
         (Some(a), Some(b)) => (a, b),
         _ => return Err("missing quantisation table".to_string()),
     };
-    if width == 0 || height == 0 || (width + 7) / 8 > 255 || (height + 7) / 8 > 255 {
+    if width == 0 || height == 0 || width.div_ceil(8) > 255 || height.div_ceil(8) > 255 {
         return Err(format!(
             "picture size {}x{} cannot be described by RTP/JPEG (max 2040)",
             width, height

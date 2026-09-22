@@ -122,7 +122,7 @@ fn supervise(hub: Arc<Hub>, mut cap: Capture) {
         let age = st.age.unwrap_or(0.0);
 
         if st.total == 0 {
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 say!(
                     "no frames yet after {:.0}s - is the HDMI source on and connected to the card?",
                     t.duration_since(start).as_secs_f64()
@@ -148,7 +148,7 @@ fn supervise(hub: Arc<Hub>, mut cap: Capture) {
                 say!("picture is changing again");
                 flagged_same = false;
             }
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 let mut astr = String::new();
                 if hub.audio_format().is_some() {
                     let ab = hub.audio_bytes();

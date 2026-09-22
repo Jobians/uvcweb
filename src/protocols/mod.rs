@@ -6,6 +6,7 @@
 //!      and a `pub fn create() -> Box<dyn Protocol>`;
 //!   2. add `pub mod <name>;` below;
 //!   3. add one line to [`REGISTRY`].
+//!
 //! The command line (`-P name`, `-p name=port`, `--help`) picks it up automatically.
 //!
 //! `start` must bind its sockets, spawn its own threads and return quickly.

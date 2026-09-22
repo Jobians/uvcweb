@@ -45,8 +45,8 @@ pub fn packetize_jpeg(
     max_payload: usize,
 ) -> Vec<Vec<u8>> {
     let scan = &data[info.scan_start..info.scan_end];
-    let w8 = ((info.width as usize + 7) / 8) as u8;
-    let h8 = ((info.height as usize + 7) / 8) as u8;
+    let w8 = (info.width as usize).div_ceil(8) as u8;
+    let h8 = (info.height as usize).div_ceil(8) as u8;
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut off = 0usize;
     loop {
@@ -88,6 +88,7 @@ pub fn packetize_jpeg(
 
 /// Split interleaved little-endian S16 PCM into RTP L16 packets (network byte order, RFC 3551).
 /// `pos` / `pos0` are running sample-frame counters; the RTP timestamp is `base_ts + (pos - pos0)`.
+#[allow(clippy::too_many_arguments)]
 pub fn packetize_l16(
     pcm_le: &[u8],
     chans: usize,
@@ -109,7 +110,7 @@ pub fn packetize_l16(
         let mut p: Vec<u8> = Vec::with_capacity(12 + k * fb);
         rtp_header(&mut p, false, PT_L16, *seq, ts, ssrc);
         *seq = seq.wrapping_add(1);
-        for s in pcm_le[i * fb..(i + k) * fb].chunks_exact(2) {
+        for s in pcm_le[i * fb..(i + k) * fb].as_chunks::<2>().0 {
             p.push(s[1]); // swap to big endian
             p.push(s[0]);
         }
@@ -151,7 +152,7 @@ pub fn sender_report(
     let mut item: Vec<u8> = vec![1, cname.len() as u8];
     item.extend_from_slice(cname.as_bytes());
     item.push(0);
-    while (item.len() + 4) % 4 != 0 {
+    while !(item.len() + 4).is_multiple_of(4) {
         item.push(0);
     }
     let words = (4 + 4 + item.len()) / 4 - 1;

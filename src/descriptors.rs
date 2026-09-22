@@ -131,16 +131,14 @@ pub fn mjpeg_modes(alts: &[RawAlt]) -> Vec<MjpegMode> {
                     }
                 }
                 0x04 | 0x10 => in_mjpeg = false, // uncompressed / frame based formats
-                0x07 => {
+                0x07 if in_mjpeg && d.len() >= 25 => {
                     // VS_FRAME_MJPEG
-                    if in_mjpeg && d.len() >= 25 {
-                        modes.push(MjpegMode {
-                            width: u16le(&d[5..7]),
-                            height: u16le(&d[7..9]),
-                            interval: u32le(&d[21..25]),
-                            is_default: d[3] == default_idx,
-                        });
-                    }
+                    modes.push(MjpegMode {
+                        width: u16le(&d[5..7]),
+                        height: u16le(&d[7..9]),
+                        interval: u32le(&d[21..25]),
+                        is_default: d[3] == default_idx,
+                    });
                 }
                 _ => {}
             }
@@ -158,11 +156,9 @@ pub fn default_mode(modes: &[MjpegMode]) -> Option<(u32, u32, u32)> {
         .iter()
         .find(|m| m.is_default)
         .or_else(|| modes.first())?;
-    let fps = if m.interval > 0 {
-        10_000_000 / m.interval
-    } else {
-        30
-    };
+
+    let fps = 10_000_000_u32.checked_div(m.interval).unwrap_or(30);
+
     Some((m.width, m.height, fps))
 }
 
@@ -249,11 +245,7 @@ pub fn audio_alts(alts: &[RawAlt]) -> Vec<AudioAlt> {
 }
 
 fn abs_diff(a: u32, b: u32) -> u32 {
-    if a > b {
-        a - b
-    } else {
-        b - a
-    }
+    a.abs_diff(b)
 }
 
 /// The sample rate we will use for `a` given a preference.

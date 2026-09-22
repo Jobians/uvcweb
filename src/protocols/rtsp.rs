@@ -393,7 +393,7 @@ fn parse_pair<T: std::str::FromStr>(s: &str) -> Option<(T, T)> {
 fn parse_transport(h: &str) -> Option<Chosen> {
     for spec in h.split(',') {
         let toks: Vec<&str> = spec.split(';').map(|t| t.trim()).collect();
-        if toks.iter().any(|t| *t == "multicast") {
+        if toks.contains(&"multicast") {
             continue;
         }
         let proto = toks.first().copied().unwrap_or("");

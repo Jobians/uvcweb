@@ -139,7 +139,7 @@ jobs:
           ./build-rust.sh
 
       - name: Upload jniLibs (input to the Gradle build, and useful on its own)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jniLibs
           path: android/app/src/main/jniLibs
@@ -163,7 +163,7 @@ jobs:
           done
 
       - name: Upload Termux binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: uvcweb-termux-binaries
           path: dist/termux
@@ -208,7 +208,7 @@ jobs:
           ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload the APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apk-debug
           path: android/app/build/outputs/apk/debug/*.apk
@@ -266,7 +266,7 @@ jobs:
         run: rm -f android/app/release.keystore
 
       - name: Upload the signed APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apk-release
           path: android/app/build/outputs/apk/release/*.apk

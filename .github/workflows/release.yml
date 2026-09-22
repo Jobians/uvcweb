@@ -1,0 +1,64 @@
+# Publishes a GitHub Release when a version tag (v1.2.3) is pushed.
+# Runs the Android workflow to get the APK and the Termux binaries, then attaches
+# everything to the release, along with a plain "cargo build" binary for Linux.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    uses: ./.github/workflows/android.yml
+    with:
+      version_name: ${{ github.ref_name }}
+    secrets: inherit
+
+  linux-binary:
+    name: Build the Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libuvc-dev
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uvcweb-linux-x86_64
+          path: target/release/uvcweb
+
+  publish:
+    name: Publish the release
+    needs: [android, linux-binary]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download every build artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      # dist/apk-debug/*.apk, dist/uvcweb-termux-binaries/<abi>/uvcweb, dist/uvcweb-linux-x86_64/uvcweb, [dist/apk-release/*.apk]
+      - name: Rename Termux binaries so the ABI is in the filename
+        run: |
+          cd dist/uvcweb-termux-binaries
+          for abi in */; do
+            abi="${abi%/}"
+            mv "$abi/uvcweb" "../uvcweb-termux-$abi"
+          done
+
+      - name: Rename the Linux binary
+        run: mv dist/uvcweb-linux-x86_64/uvcweb dist/uvcweb-linux-x86_64-bin
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: uvcweb ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/apk-debug/*.apk
+            dist/apk-release/*.apk
+            dist/uvcweb-termux-*
+            dist/uvcweb-linux-x86_64-bin

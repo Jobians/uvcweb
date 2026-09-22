@@ -1,0 +1,13 @@
+/target
+/android/native-deps
+# Third-party source you clone yourself (see android/README.md "Vendoring" section).
+# Remove these two lines if you'd rather commit them for fully offline/reproducible builds.
+# /third_party/libusb
+# /third_party/libuvc
+/android/app/src/main/jniLibs/*/
+/android/app/build
+/android/build
+/android/.gradle
+/android/local.properties
+*.iml
+.idea

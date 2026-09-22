@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>uvcweb</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  body {
+    color: #0f0;
+    font: 14px monospace;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* The picture is centred on the screen. JavaScript sizes it to the window
+     (width and height are swapped when it is rotated by 90 or 270 degrees). */
+  #video {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  /* Info bar: status line and buttons, drawn on top of the picture. */
+  #bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 6px 10px;
+    padding-top: max(6px, env(safe-area-inset-top));
+    padding-left: max(10px, env(safe-area-inset-left));
+    padding-right: max(10px, env(safe-area-inset-right));
+    background: rgba(0, 0, 0, 0.65);
+  }
+  #bar.hidden {
+    display: none;
+  }
+  #status {
+    flex: 1 1 260px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  button {
+    font: inherit;
+    color: #0f0;
+    background: rgba(0, 40, 0, 0.8);
+    border: 1px solid #0a0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    min-height: 40px;
+  }
+  button:active {
+    background: #0a0;
+    color: #000;
+  }
+  button[hidden] {
+    display: none;
+  }
+
+  /* A phone held sideways has very little height: make the bar more compact. */
+  @media (orientation: landscape) and (max-height: 500px) {
+    #bar { padding-top: max(3px, env(safe-area-inset-top)); padding-bottom: 3px; }
+    button { min-height: 34px; padding: 5px 9px; }
+  }
+</style>
+</head>
+<body>
+
+<img id="video" src="/stream" alt="camera picture">
+
+<div id="bar">
+  <div id="status">connecting...</div>
+  <div id="buttons">
+    <button id="btn-fullscreen" type="button">Full screen</button>
+    <button id="btn-landscape" type="button">Landscape</button>
+    <button id="btn-rotate" type="button">Rotate</button>
+    <button id="btn-hide" type="button">Hide</button>
+  </div>
+</div>
+
+<script>
+// uvcweb viewer page. Plain JavaScript: no libraries, no build step, no minifying.
+//
+// Controls
+//   tap the picture   show / hide the info bar (also starts the audio on the first tap)
+//   Full screen       browser full screen; the info bar hides itself
+//   Landscape         full screen + lock the phone to landscape (browsers that allow it)
+//   Rotate            turn the picture 90 degrees (for phones with auto-rotate switched off)
+//   Hide              hide the info bar
+//   keyboard          f = full screen, h = hide/show bar, r = rotate
+//
+// URL option: /?lead=100 sets the audio buffer in milliseconds (lower = audio earlier).
+
+
+// ===========================================================================
+// Settings that are remembered between visits
+// ===========================================================================
+
+function loadSetting(name, fallback) {
+  try {
+    var value = localStorage.getItem('uvcweb.' + name);
+    return value === null ? fallback : value;
+  } catch (error) {
+    return fallback;          // storage can be blocked; the page still works
+  }
+}
+
+function saveSetting(name, value) {
+  try {
+    localStorage.setItem('uvcweb.' + name, value);
+  } catch (error) {
+    // ignore
+  }
+}
+
+
+// ===========================================================================
+// Audio
+//
+// The server sends the card's audio as an endless WAV stream. A plain audio
+// tag would buffer far too much (audio would lag behind the picture), so the
+// samples are read with fetch() and scheduled with the Web Audio API, keeping
+// only a small cushion ahead of the playback position.
+// ===========================================================================
+
+var AUDIO_LEAD_SECONDS = 0.10;      // audio kept buffered ahead of playback
+var pageQuery = new URLSearchParams(location.search);
+if (pageQuery.has('lead')) {
+  AUDIO_LEAD_SECONDS = parseFloat(pageQuery.get('lead')) / 1000;
+}
+
+var audioContext = null;
+var audioState = 'tap';             // 'tap' = waiting for a tap, 'on' = playing, 'none' = server has no audio
+var nextPlayTime = 0;               // audio clock time at which the next chunk should start
+var channels = 1;
+var sampleRate = 48000;
+var pendingBytes = new Uint8Array(0);   // bytes that do not fill a whole sample frame yet
+var headerBytes = null;                 // collects the 44 byte WAV header at the start of the stream
+
+// Schedule one chunk of interleaved 16 bit samples (an Int16Array) for playback.
+function playChunk(samples) {
+  var frames = samples.length / channels;
+  var buffer = audioContext.createBuffer(channels, frames, sampleRate);
+  for (var channel = 0; channel < channels; channel++) {
+    var target = buffer.getChannelData(channel);
+    for (var i = 0; i < frames; i++) {
+      target[i] = samples[i * channels + channel] / 32768;
+    }
+  }
+
+  var now = audioContext.currentTime;
+  if (nextPlayTime < now + 0.02) {
+    // Running dry (or just started): begin again with the normal cushion.
+    nextPlayTime = now + AUDIO_LEAD_SECONDS;
+  } else if (nextPlayTime > now + AUDIO_LEAD_SECONDS + 0.3) {
+    // Far ahead of playback: drop this chunk so the delay does not keep growing.
+    return;
+  }
+
+  var source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  source.start(nextPlayTime);
+  nextPlayTime += frames / sampleRate;
+}
+
+// Take raw bytes from the stream, keep any incomplete sample frame for next time.
+function feedBytes(incoming) {
+  var joined = new Uint8Array(pendingBytes.length + incoming.length);
+  joined.set(pendingBytes);
+  joined.set(incoming, pendingBytes.length);
+
+  var frameBytes = channels * 2;
+  var usable = Math.floor(joined.length / frameBytes) * frameBytes;
+  pendingBytes = joined.slice(usable);
+  if (usable > 0) {
+    playChunk(new Int16Array(joined.buffer, 0, usable / 2));
+  }
+}
+
+function startAudioStream() {
+  fetch('/audio').then(function (response) {
+    if (!response.ok) {
+      audioState = 'none';      // this server run has no audio
+      return;
+    }
+    var reader = response.body.getReader();
+    headerBytes = new Uint8Array(0);
+    pendingBytes = new Uint8Array(0);
+    nextPlayTime = 0;
+    audioState = 'on';
+
+    function readNext() {
+      return reader.read().then(function (result) {
+        if (result.done) {
+          throw new Error('audio stream ended');
+        }
+        var bytes = result.value;
+
+        if (headerBytes) {
+          // Still collecting the WAV header: channels are at byte 22, sample rate at bytes 24..27.
+          var joined = new Uint8Array(headerBytes.length + bytes.length);
+          joined.set(headerBytes);
+          joined.set(bytes, headerBytes.length);
+          if (joined.length < 44) {
+            headerBytes = joined;
+            return readNext();
+          }
+          channels = joined[22] | (joined[23] << 8);
+          sampleRate = joined[24] | (joined[25] << 8) | (joined[26] << 16) | (joined[27] << 24);
+          headerBytes = null;
+          bytes = joined.subarray(44);
+        }
+
+        feedBytes(bytes);
+        return readNext();
+      });
+    }
+    return readNext();
+  }).catch(function () {
+    if (audioState === 'on') {
+      setTimeout(startAudioStream, 1000);     // connection dropped: try again
+    }
+  });
+}
+
+// Browsers only allow sound after the user has touched the page.
+function startAudioOnGesture() {
+  if (audioContext) {
+    return;
+  }
+  var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return;
+  }
+  audioContext = new AudioContextClass({ latencyHint: 'interactive' });
+  audioContext.resume().then(function () {
+    if (audioContext.state === 'running') {
+      startAudioStream();
+    } else {
+      audioContext.close();       // this gesture was not accepted; the next tap tries again
+      audioContext = null;
+    }
+  }).catch(function () {
+    audioContext = null;
+  });
+}
+
+['click', 'touchend', 'pointerup', 'keydown'].forEach(function (eventName) {
+  window.addEventListener(eventName, startAudioOnGesture, { passive: true });
+});
+
+
+// ===========================================================================
+// Picture: size, rotation and reconnecting
+// ===========================================================================
+
+var video = document.getElementById('video');
+var rotation = parseInt(loadSetting('rotation', '0'), 10) || 0;     // 0, 90, 180 or 270 degrees
+
+// Fit the picture to the window. When it is turned sideways its box is
+// swapped (width <-> height) so that, after turning, it still fills the screen.
+function layoutVideo() {
+  var width = window.innerWidth;
+  var height = window.innerHeight;
+  var sideways = (rotation % 180) !== 0;
+  video.style.width = (sideways ? height : width) + 'px';
+  video.style.height = (sideways ? width : height) + 'px';
+  video.style.transform = 'translate(-50%, -50%) rotate(' + rotation + 'deg)';
+}
+
+function rotateVideo() {
+  rotation = (rotation + 90) % 360;
+  saveSetting('rotation', rotation);
+  layoutVideo();
+}
+
+// If the stream drops (server restart, phone slept, ...) reconnect after a second.
+video.addEventListener('error', function () {
+  setTimeout(function () {
+    video.src = '/stream?' + Date.now();
+  }, 1000);
+});
+
+window.addEventListener('resize', layoutVideo);
+window.addEventListener('orientationchange', layoutVideo);
+
+
+// ===========================================================================
+// Info bar, full screen and landscape lock
+// ===========================================================================
+
+var bar = document.getElementById('bar');
+var statusLine = document.getElementById('status');
+var fullscreenButton = document.getElementById('btn-fullscreen');
+var landscapeButton = document.getElementById('btn-landscape');
+var rotateButton = document.getElementById('btn-rotate');
+var hideButton = document.getElementById('btn-hide');
+
+var barHidden = loadSetting('hidden', '0') === '1';
+var landscapeLocked = false;
+var noteText = '';                  // short message shown in the status line
+var noteUntil = 0;
+
+function showNote(text) {
+  noteText = text;
+  noteUntil = Date.now() + 4000;
+}
+
+function setBarHidden(hidden, remember) {
+  barHidden = hidden;
+  bar.classList.toggle('hidden', hidden);
+  if (remember) {
+    saveSetting('hidden', hidden ? '1' : '0');
+  }
+}
+
+function toggleBar() {
+  setBarHidden(!barHidden, true);
+}
+
+function fullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function canFullscreen() {
+  var page = document.documentElement;
+  return !!(page.requestFullscreen || page.webkitRequestFullscreen);
+}
+
+function canLockOrientation() {
+  return !!(window.screen && screen.orientation && screen.orientation.lock);
+}
+
+// Always returns a promise (old WebKit returns nothing).
+function enterFullscreen() {
+  var page = document.documentElement;
+  var request = page.requestFullscreen || page.webkitRequestFullscreen;
+  var result = request.call(page);
+  return result && result.then ? result : Promise.resolve();
+}
+
+function leaveFullscreen() {
+  var exit = document.exitFullscreen || document.webkitExitFullscreen;
+  if (exit) {
+    exit.call(document);
+  }
+}
+
+function toggleFullscreen() {
+  if (fullscreenElement()) {
+    leaveFullscreen();
+  } else {
+    enterFullscreen().catch(function () {
+      showNote('the browser refused full screen');
+    });
+  }
+}
+
+// Landscape needs full screen first (that is a browser rule), then a lock.
+function toggleLandscape() {
+  if (landscapeLocked) {
+    screen.orientation.unlock();
+    landscapeLocked = false;
+    updateButtons();
+    return;
+  }
+  var ready = fullscreenElement() ? Promise.resolve() : enterFullscreen();
+  ready.then(function () {
+    return screen.orientation.lock('landscape');
+  }).then(function () {
+    landscapeLocked = true;
+    updateButtons();
+  }).catch(function () {
+    showNote('this browser cannot lock landscape - use Rotate');
+  });
+}
+
+function updateButtons() {
+  fullscreenButton.textContent = fullscreenElement() ? 'Exit full screen' : 'Full screen';
+  landscapeButton.textContent = landscapeLocked ? 'Auto-rotate' : 'Landscape';
+}
+
+// Entering full screen hides the info bar; leaving it brings the bar back.
+function onFullscreenChange() {
+  var isFullscreen = !!fullscreenElement();
+  if (!isFullscreen) {
+    landscapeLocked = false;      // the browser drops the orientation lock together with full screen
+  }
+  setBarHidden(isFullscreen, false);
+  updateButtons();
+  layoutVideo();
+}
+
+fullscreenButton.addEventListener('click', toggleFullscreen);
+landscapeButton.addEventListener('click', toggleLandscape);
+rotateButton.addEventListener('click', rotateVideo);
+hideButton.addEventListener('click', toggleBar);
+document.addEventListener('fullscreenchange', onFullscreenChange);
+document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+// Tapping the picture (anything except the bar itself) shows / hides the bar.
+document.addEventListener('click', function (event) {
+  if (bar.contains(event.target)) {
+    return;
+  }
+  toggleBar();
+});
+
+document.addEventListener('keydown', function (event) {
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
+  if (event.key === 'f') {
+    if (canFullscreen()) { toggleFullscreen(); }
+  } else if (event.key === 'h') {
+    toggleBar();
+  } else if (event.key === 'r') {
+    rotateVideo();
+  }
+});
+
+
+// ===========================================================================
+// Status line (refreshed once a second)
+// ===========================================================================
+
+function refreshStatus() {
+  fetch('/status').then(function (response) {
+    return response.json();
+  }).then(function (status) {
+    var text;
+    if (status.frames) {
+      text = status.frames + ' frames, ' + status.fps + ' fps, ' + status.w + 'x' + status.h +
+             ', last frame ' + status.age + 's ago';
+    } else {
+      text = 'no frames from the card yet';
+    }
+    if (status.same >= 90) {
+      text += ' - IMAGE NOT CHANGING';
+    }
+    if (!status.audio) {
+      text += ' - no audio';
+    } else if (audioState === 'tap') {
+      text += ' - tap the page for audio';
+    } else if (audioState === 'on') {
+      text += ' - audio on';
+    }
+    if (Date.now() < noteUntil) {
+      text += ' - ' + noteText;
+    }
+    statusLine.textContent = text;
+  }).catch(function () {
+    statusLine.textContent = 'server not reachable';
+  });
+}
+
+
+// ===========================================================================
+// Start
+// ===========================================================================
+
+fullscreenButton.hidden = !canFullscreen();       // e.g. iPhone Safari has no page full screen
+landscapeButton.hidden = !canLockOrientation();   // only some Android browsers allow the lock
+setBarHidden(barHidden, false);
+layoutVideo();
+updateButtons();
+setInterval(refreshStatus, 1000);
+refreshStatus();
+</script>
+</body>
+</html>

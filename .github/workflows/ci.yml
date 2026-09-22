@@ -1,0 +1,52 @@
+# Runs on every push and pull request: builds the Rust crate for Linux (fast, no NDK needed)
+# and runs the test suite from README.md ("cargo test", 24 tests, none touch real USB hardware).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  pull_request:
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Build + test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The Linux build links the system libusb/libuvc, same as Termux; only needed for this job.
+      - name: Install libuvc + libusb (dev headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev libuvc-dev
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo build
+        run: cargo build --release --verbose
+
+      - name: cargo test
+        run: cargo test --release --verbose
+
+      - name: Upload the uvcweb binary (Linux x86_64, for reference / local testing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvcweb-linux-x86_64
+          path: target/release/uvcweb
+          if-no-files-found: error

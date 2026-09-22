@@ -1,0 +1,31 @@
+[package]
+name = "uvcweb"
+version = "0.3.0"
+edition = "2021"
+description = "UVC MJPEG capture card to web browser / RTSP with live USB audio: a program for Termux and a library for Android"
+
+# Two products from one source tree:
+#   * the `uvcweb` program (Termux / Linux)          -> cargo build --release
+#   * `libuvcweb_core.so` for the Android app        -> android/build-rust.sh
+[lib]
+name = "uvcweb_core"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "uvcweb"
+path = "src/main.rs"
+
+# No external crates on purpose: everything is std + libuvc / libusb.
+[dependencies]
+
+[features]
+# On by the Android build only (android/build-rust.sh passes --features android-static).
+# Statically links the libusb+libuvc archive that build-native-deps.sh produces, instead of
+# the system's shared libraries. Never enable this for a normal `cargo build`/`cargo run`
+# (Termux, Linux): those link the shared libusb/libuvc you `pkg install` / `apt install`.
+android-static = []
+
+[profile.release]
+opt-level = 3
+strip = true

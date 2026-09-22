@@ -1,0 +1,273 @@
+# Builds everything Android-related from one source tree:
+#   * the Rust library for 3 CPU types (arm64-v8a, armeabi-v7a, x86_64)
+#   * from that, the Kotlin app's debug APK
+#   * from that, standalone `uvcweb` binaries for Termux (same static libusb/libuvc as the app)
+#
+# The native dependencies (libusb + libuvc) rarely change, so they are cached by their
+# git ref (android/build-native-deps.sh LIBUSB_REF / LIBUVC_REF) to keep builds fast.
+#
+# Call it directly (Actions tab -> Android -> Run workflow) or let ci-release.yml call it for a tag.
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "build.rs"
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "build.rs"
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_call:
+    inputs:
+      version_name:
+        description: "APK versionName (defaults to the short commit hash)"
+        type: string
+        required: false
+    outputs:
+      artifact-run-id:
+        description: "run id that holds the build artifacts (apk-debug, uvcweb-termux-*)"
+        value: ${{ jobs.rust.outputs.run_id }}
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "APK versionName (defaults to the short commit hash)"
+        type: string
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  ANDROID_API: "26"
+  ABIS: "arm64-v8a armeabi-v7a x86_64"
+  LIBUSB_REF: "v1.0.30"
+  LIBUVC_REF: "v0.0.8"
+
+jobs:
+  # ---------------------------------------------------------------- native deps (cached)
+  native-deps:
+    name: Build libusb + libuvc (native-deps)
+    runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.key.outputs.key }}
+    steps:
+      # sparse-checkout: the script itself, plus third_party/ in case libusb/libuvc were committed
+      # there (see android/README.md "Vendoring"); harmless if that folder doesn't exist in the repo.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            android/build-native-deps.sh
+            third_party
+
+      - id: key
+        run: echo "key=native-deps-${{ env.LIBUSB_REF }}-${{ env.LIBUVC_REF }}-api${{ env.ANDROID_API }}-${{ hashFiles('android/build-native-deps.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache native-deps
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: android/native-deps
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Set up the Android NDK
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Build libusb + libuvc for Android
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          cd android
+          chmod +x build-native-deps.sh
+          ./build-native-deps.sh
+
+  # ---------------------------------------------------------------- rust library
+  rust:
+    name: Build Rust library (uvcweb_core)
+    needs: native-deps
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up the Android NDK
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Restore native-deps
+        uses: actions/cache@v4
+        with:
+          path: android/native-deps
+          key: ${{ needs.native-deps.outputs.cache-key }}
+          fail-on-cache-miss: true
+
+      - name: cargo test (host, std-only logic; skips the Android-only JNI module)
+        run: cargo test --release --verbose
+
+      - name: Build the Rust library for Android
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          cd android
+          chmod +x build-rust.sh
+          ./build-rust.sh
+
+      - name: Upload jniLibs (input to the Gradle build, and useful on its own)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jniLibs
+          path: android/app/src/main/jniLibs
+
+      # A `uvcweb` program for Termux, linked against the very same static libusb/libuvc as the
+      # app, so users who trust the release don't have to build libusb/libuvc themselves.
+      - name: Build standalone uvcweb binaries for Termux
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for pair in "aarch64-linux-android:arm64-v8a" "armv7-linux-androideabi:armeabi-v7a" "x86_64-linux-android:x86_64"; do
+            triple="${pair%%:*}"; abi="${pair##*:}"
+            echo "== termux binary for $abi"
+            export CC_${triple//-/_}="$NDK_BIN/${triple}${ANDROID_API}-clang"
+            export CARGO_TARGET_$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')_LINKER="$NDK_BIN/${triple}${ANDROID_API}-clang"
+            export UVCWEB_NATIVE_DIR="$PWD/android/native-deps"
+            cargo build --release --bin uvcweb --target "$triple" --features android-static
+            mkdir -p "dist/termux/$abi"
+            cp "target/$triple/release/uvcweb" "dist/termux/$abi/uvcweb"
+          done
+
+      - name: Upload Termux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: uvcweb-termux-binaries
+          path: dist/termux
+
+  # ---------------------------------------------------------------- android app
+  apk:
+    name: Build the Android app (debug APK)
+    needs: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download jniLibs
+        uses: actions/download-artifact@v4
+        with:
+          name: jniLibs
+          path: android/app/src/main/jniLibs
+
+      - name: Compute version
+        id: v
+        run: |
+          name="${{ inputs.version_name }}"
+          [ -n "$name" ] || name="0.0.0-${GITHUB_SHA::7}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Build debug APK
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          cd android
+          chmod +x gradlew || true
+          ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- release apk (only if signing secrets are set)
+  apk-release:
+    name: Build the Android app (signed release APK)
+    needs: rust
+    runs-on: ubuntu-latest
+    if: ${{ vars.SIGN_RELEASE == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download jniLibs
+        uses: actions/download-artifact@v4
+        with:
+          name: jniLibs
+          path: android/app/src/main/jniLibs
+
+      - name: Decode the signing key
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+      - name: Compute version
+        id: v
+        run: |
+          name="${{ inputs.version_name }}"
+          [ -n "$name" ] || name="0.0.0-${GITHUB_SHA::7}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed release APK
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+          VERSION_CODE: ${{ github.run_number }}
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew || true
+          ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Remove the keystore (do not leave it in the runner's cache)
+        if: always()
+        run: rm -f android/app/release.keystore
+
+      - name: Upload the signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

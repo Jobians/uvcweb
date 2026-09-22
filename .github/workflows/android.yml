@@ -127,6 +127,9 @@ jobs:
           key: ${{ needs.native-deps.outputs.cache-key }}
           fail-on-cache-miss: true
 
+      - name: Install host libusb/libuvc (for cargo test, host target only)
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libuvc-dev
+      
       - name: cargo test (host, std-only logic; skips the Android-only JNI module)
         run: cargo test --release --verbose
 

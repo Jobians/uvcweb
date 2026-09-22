@@ -157,10 +157,8 @@ jobs:
           for pair in "aarch64-linux-android:arm64-v8a" "armv7-linux-androideabi:armeabi-v7a" "x86_64-linux-android:x86_64"; do
             triple="${pair%%:*}"; abi="${pair##*:}"
             echo "== termux binary for $abi"
-            export CC_${triple//-/_}="$NDK_BIN/${triple}${ANDROID_API}-clang"
-            export CARGO_TARGET_$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')_LINKER="$NDK_BIN/${triple}${ANDROID_API}-clang"
             export UVCWEB_NATIVE_DIR="$PWD/android/native-deps"
-            cargo build --release --bin uvcweb --target "$triple" --features android-static
+            cargo ndk -t "$abi" --platform "$ANDROID_API" build --release --bin uvcweb --features android-static
             mkdir -p "dist/termux/$abi"
             cp "target/$triple/release/uvcweb" "dist/termux/$abi/uvcweb"
           done

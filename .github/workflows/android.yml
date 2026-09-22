@@ -59,7 +59,7 @@ jobs:
     steps:
       # sparse-checkout: the script itself, plus third_party/ in case libusb/libuvc were committed
       # there (see android/README.md "Vendoring"); harmless if that folder doesn't exist in the repo.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             android/build-native-deps.sh
@@ -99,7 +99,7 @@ jobs:
     outputs:
       run_id: ${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -174,7 +174,7 @@ jobs:
     needs: rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK
         uses: actions/setup-java@v6
@@ -221,7 +221,7 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ vars.SIGN_RELEASE == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK
         uses: actions/setup-java@v6

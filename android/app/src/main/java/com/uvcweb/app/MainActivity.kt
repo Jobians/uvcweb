@@ -38,6 +38,9 @@ class MainActivity : Activity() {
   private lateinit var rtspCheck: CheckBox
   private lateinit var rtspPortEdit: EditText
   private lateinit var lanCheck: CheckBox
+  private lateinit var mdnsCheck: CheckBox
+  private lateinit var mdnsNameEdit: EditText
+  private lateinit var autoReconnectCheck: CheckBox
   private lateinit var audioCheck: CheckBox
   private lateinit var widthEdit: EditText
   private lateinit var heightEdit: EditText
@@ -48,6 +51,7 @@ class MainActivity : Activity() {
   private lateinit var urlText: TextView
   private lateinit var logText: TextView
   private lateinit var logScroll: ScrollView
+  private lateinit var clearLogButton: Button
 
   private var pendingDeviceName: String? = null
   private var lastLog = ""
@@ -85,6 +89,9 @@ class MainActivity : Activity() {
     rtspCheck = findViewById(R.id.rtspCheck)
     rtspPortEdit = findViewById(R.id.rtspPortEdit)
     lanCheck = findViewById(R.id.lanCheck)
+    mdnsCheck = findViewById(R.id.mdnsCheck)
+    mdnsNameEdit = findViewById(R.id.mdnsNameEdit)
+    autoReconnectCheck = findViewById(R.id.autoReconnectCheck)
     audioCheck = findViewById(R.id.audioCheck)
     widthEdit = findViewById(R.id.widthEdit)
     heightEdit = findViewById(R.id.heightEdit)
@@ -95,9 +102,19 @@ class MainActivity : Activity() {
     urlText = findViewById(R.id.urlText)
     logText = findViewById(R.id.logText)
     logScroll = findViewById(R.id.logScroll)
+    clearLogButton = findViewById(R.id.clearLogButton)
 
     showSettings(Settings.load(this))
 
+    mdnsCheck.setOnCheckedChangeListener {
+      _, checked ->
+      mdnsNameEdit.isEnabled = checked
+    }
+    clearLogButton.setOnClickListener {
+      Util.clearLog(this)
+      lastLog = ""
+      logText.text = ""
+    }
     startButton.setOnClickListener {
       onStartStopClicked()
     }
@@ -140,6 +157,10 @@ class MainActivity : Activity() {
     rtspCheck.isChecked = s.rtsp
     rtspPortEdit.setText(s.rtspPort.toString())
     lanCheck.isChecked = s.lan
+    mdnsCheck.isChecked = s.mdns
+    mdnsNameEdit.setText(s.mdnsName)
+    mdnsNameEdit.isEnabled = s.mdns
+    autoReconnectCheck.isChecked = s.autoReconnect
     audioCheck.isChecked = s.audio
     widthEdit.setText(s.width.toString())
     heightEdit.setText(s.height.toString())
@@ -154,6 +175,11 @@ class MainActivity : Activity() {
       rtsp = rtspCheck.isChecked,
       rtspPort = rtspPortEdit.text.toString().toIntOrNull() ?: d.rtspPort,
       lan = lanCheck.isChecked,
+      mdns = mdnsCheck.isChecked,
+      mdnsName = mdnsNameEdit.text.toString().trim().ifEmpty {
+        d.mdnsName
+      },
+      autoReconnect = autoReconnectCheck.isChecked,
       audio = audioCheck.isChecked,
       width = widthEdit.text.toString().toIntOrNull() ?: 0,
       height = heightEdit.text.toString().toIntOrNull() ?: 0,
@@ -246,6 +272,7 @@ class MainActivity : Activity() {
       CaptureService.State.STOPPED -> "Stopped" + messageSuffix()
       CaptureService.State.STARTING -> "Starting..."
       CaptureService.State.RUNNING -> "Running"
+      CaptureService.State.WAITING -> CaptureService.message
     }
 
     val running = state == CaptureService.State.RUNNING
@@ -253,7 +280,7 @@ class MainActivity : Activity() {
     viewerButton.isEnabled = running && settings.web
     urlText.text = if (running) buildUrlText(settings) else ""
 
-    val log = Util.tail(File(filesDir, CaptureService.LOG_NAME))
+    val log = Util.tail(File(filesDir, Util.LOG_NAME))
     if (log != lastLog) {
       lastLog = log
       logText.text = log
@@ -281,11 +308,29 @@ class MainActivity : Activity() {
         if (s.web) sb.append("http://").append(ip).append(':').append(s.webPort).append("/\n")
         if (s.rtsp) sb.append("rtsp://").append(ip).append(':').append(s.rtspPort).append("/live\n")
       }
+      // While mDNS is on but not yet confirmed, show a placeholder so it's clear it's still
+      // working, not stuck or broken - see CaptureService.mdnsRegistered.
+      if (s.mdns) {
+        if (CaptureService.mdnsRegistered) {
+          val host = s.mdnsName.trim().ifEmpty {
+            "uvcweb"
+          } + ".local"
+          if (s.web) sb.append("http://").append(host).append(':').append(s.webPort).append("/\n")
+          if (s.rtsp) sb.append("rtsp://").append(host).append(':').append(s.rtspPort).append("/live\n")
+        } else if (CaptureService.mdnsFailed) {
+          sb.append("mDNS: unavailable\n")
+        } else {
+          sb.append("mDNS: connecting...\n")
+        }
+      }
     }
     return sb.toString().trimEnd()
   }
 
+  // A toast disappears in a few seconds; every one of these is also worth keeping in the
+  // on-screen log, since it explains why nothing else seems to be happening.
   private fun toast(text: String) {
+    Util.appendLog(this, text)
     Toast.makeText(this, text, Toast.LENGTH_LONG).show()
   }
 

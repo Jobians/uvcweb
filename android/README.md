@@ -56,7 +56,11 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
 4. **Open viewer** shows the web page full screen inside the app (rotate, landscape and hide buttons work
    there too). Other apps can use the URLs shown under the status line, e.g. VLC on `rtsp://127.0.0.1:8554/live`.
-5. "Allow other devices on the network" makes the servers reachable from your LAN (no password).
+5. "Allow other devices on the network" makes the servers reachable from your LAN (no password),
+   and also advertises them over mDNS/Bonjour under the name shown in that same field (default
+   "uvcweb", editable). Other devices can find it by name instead of typing the IP address - for
+   example VLC's "Local Network" browser, or any mDNS/Bonjour browser app. Discovery is Android-app
+   only; the Termux program has no mDNS support.
 
 The log at the bottom is the same log as the Termux program prints.
 

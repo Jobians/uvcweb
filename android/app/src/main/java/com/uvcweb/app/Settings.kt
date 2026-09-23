@@ -9,10 +9,17 @@ data class Settings(
     val rtsp: Boolean = false,
     val rtspPort: Int = 8554,
     val lan: Boolean = false,
+    // Advertise via mDNS/Bonjour so other devices can find this phone by name (e.g. VLC's
+    // "Local Network" browser), instead of needing its IP address. Only takes effect while
+    // `lan` is also on - see CaptureService.registerMdns.
+    val mdns: Boolean = false,
     val audio: Boolean = true,
     val width: Int = 640,      // 0 = the card's default
     val height: Int = 480,
     val fps: Int = 30,
+    // Name shown to other devices when mDNS is on, e.g. "uvcweb" -> uvcweb.local
+    val mdnsName: String = "uvcweb",
+    val autoReconnect: Boolean = false,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
@@ -21,10 +28,13 @@ data class Settings(
             .putBoolean("rtsp", rtsp)
             .putInt("rtspPort", rtspPort)
             .putBoolean("lan", lan)
+            .putBoolean("mdns", mdns)
             .putBoolean("audio", audio)
             .putInt("width", width)
             .putInt("height", height)
             .putInt("fps", fps)
+            .putString("mdnsName", mdnsName)
+            .putBoolean("autoReconnect", autoReconnect)
             .apply()
     }
 
@@ -40,10 +50,13 @@ data class Settings(
                 rtsp = p.getBoolean("rtsp", d.rtsp),
                 rtspPort = p.getInt("rtspPort", d.rtspPort),
                 lan = p.getBoolean("lan", d.lan),
+                mdns = p.getBoolean("mdns", d.mdns),
                 audio = p.getBoolean("audio", d.audio),
                 width = p.getInt("width", d.width),
                 height = p.getInt("height", d.height),
                 fps = p.getInt("fps", d.fps),
+                mdnsName = p.getString("mdnsName", d.mdnsName) ?: d.mdnsName,
+                autoReconnect = p.getBoolean("autoReconnect", d.autoReconnect),
             )
         }
     }

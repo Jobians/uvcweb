@@ -40,6 +40,7 @@ class MainActivity : Activity() {
   private lateinit var lanCheck: CheckBox
   private lateinit var mdnsCheck: CheckBox
   private lateinit var mdnsNameEdit: EditText
+  private lateinit var autoReconnectCheck: CheckBox
   private lateinit var audioCheck: CheckBox
   private lateinit var widthEdit: EditText
   private lateinit var heightEdit: EditText
@@ -90,6 +91,7 @@ class MainActivity : Activity() {
     lanCheck = findViewById(R.id.lanCheck)
     mdnsCheck = findViewById(R.id.mdnsCheck)
     mdnsNameEdit = findViewById(R.id.mdnsNameEdit)
+    autoReconnectCheck = findViewById(R.id.autoReconnectCheck)
     audioCheck = findViewById(R.id.audioCheck)
     widthEdit = findViewById(R.id.widthEdit)
     heightEdit = findViewById(R.id.heightEdit)
@@ -158,6 +160,7 @@ class MainActivity : Activity() {
     mdnsCheck.isChecked = s.mdns
     mdnsNameEdit.setText(s.mdnsName)
     mdnsNameEdit.isEnabled = s.mdns
+    autoReconnectCheck.isChecked = s.autoReconnect
     audioCheck.isChecked = s.audio
     widthEdit.setText(s.width.toString())
     heightEdit.setText(s.height.toString())
@@ -176,6 +179,7 @@ class MainActivity : Activity() {
       mdnsName = mdnsNameEdit.text.toString().trim().ifEmpty {
         d.mdnsName
       },
+      autoReconnect = autoReconnectCheck.isChecked,
       audio = audioCheck.isChecked,
       width = widthEdit.text.toString().toIntOrNull() ?: 0,
       height = heightEdit.text.toString().toIntOrNull() ?: 0,
@@ -268,6 +272,7 @@ class MainActivity : Activity() {
       CaptureService.State.STOPPED -> "Stopped" + messageSuffix()
       CaptureService.State.STARTING -> "Starting..."
       CaptureService.State.RUNNING -> "Running"
+      CaptureService.State.WAITING -> CaptureService.message
     }
 
     val running = state == CaptureService.State.RUNNING

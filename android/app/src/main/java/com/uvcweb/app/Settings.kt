@@ -19,6 +19,7 @@ data class Settings(
     val fps: Int = 30,
     // Name shown to other devices when mDNS is on, e.g. "uvcweb" -> uvcweb.local
     val mdnsName: String = "uvcweb",
+    val autoReconnect: Boolean = false,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
@@ -33,6 +34,7 @@ data class Settings(
             .putInt("height", height)
             .putInt("fps", fps)
             .putString("mdnsName", mdnsName)
+            .putBoolean("autoReconnect", autoReconnect)
             .apply()
     }
 
@@ -54,6 +56,7 @@ data class Settings(
                 height = p.getInt("height", d.height),
                 fps = p.getInt("fps", d.fps),
                 mdnsName = p.getString("mdnsName", d.mdnsName) ?: d.mdnsName,
+                autoReconnect = p.getBoolean("autoReconnect", d.autoReconnect),
             )
         }
     }

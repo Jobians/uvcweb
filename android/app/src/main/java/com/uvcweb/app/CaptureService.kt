@@ -26,7 +26,7 @@ import java.io.File
  */
 class CaptureService : Service() {
 
-    enum class State { STOPPED, STARTING, RUNNING }
+    enum class State { STOPPED, STARTING, RUNNING, WAITING }
 
     private var connection: UsbDeviceConnection? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -38,12 +38,11 @@ class CaptureService : Service() {
     @Volatile
     private var stopRequested = false
 
-    private val detachReceiver = object : BroadcastReceiver() {
+    private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val name = deviceName ?: return
-            val usb = getSystemService(Context.USB_SERVICE) as UsbManager
-            if (!usb.deviceList.containsKey(name)) {
-                stopEverything("The capture card was unplugged")
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> onDeviceDetached()
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> onDeviceAttached()
             }
         }
     }
@@ -52,7 +51,75 @@ class CaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        registerPrivateReceiver(detachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED))
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+        }
+        registerPrivateReceiver(usbReceiver, filter)
+    }
+
+    /** Our device disappeared. If auto-reconnect is on, idle and wait for it to come back instead
+     * of stopping outright; otherwise this is the original "stop everything" behavior. */
+    private fun onDeviceDetached() {
+        val name = deviceName ?: return
+        val usb = getSystemService(Context.USB_SERVICE) as UsbManager
+        if (usb.deviceList.containsKey(name)) return // some other device was unplugged, not ours
+        if (Settings.load(this).autoReconnect) {
+            Thread { handleDisconnectForReconnect() }.start()
+        } else {
+            stopEverything("The capture card was unplugged")
+        }
+    }
+
+    /** A USB device showed up. Only relevant while we're WAITING after an auto-reconnect-eligible
+     * disconnect; otherwise ignore it (e.g. it's some unrelated accessory, or we're not running). */
+    private fun onDeviceAttached() {
+        synchronized(lock) {
+            if (state != State.WAITING) return
+        }
+        val usb = getSystemService(Context.USB_SERVICE) as UsbManager
+        val device = Util.findCaptureDevice(usb)
+        if (device == null) return // not our kind of device
+        if (!usb.hasPermission(device)) {
+            stopEverything("USB permission is missing for the capture card. To use auto reconnect feature, check the box 'Always open uvcweb when USB Video is connected' when you click start button and tap OK next time.")
+            return
+        }
+        Util.appendLog(this, "capture card reattached, reconnecting...")
+        deviceName = device.deviceName
+        stopRequested = false
+        synchronized(lock) {
+            state = State.STARTING
+            message = "Reconnecting..."
+        }
+        updateNotification("Reconnecting...")
+        Thread { runCapture(device.deviceName) }.start()
+    }
+
+    /** Tear down the engine/connection but keep the service (and its foreground notification)
+     * alive, so [onDeviceAttached] can bring capture back up without the user doing anything. */
+    private fun handleDisconnectForReconnect() {
+        synchronized(lock) {
+            if (state == State.STOPPED) return // already stopping/stopped via some other path
+        }
+        Util.appendLog(this, "capture card unplugged - waiting for it to be reconnected")
+        unregisterMdns()
+        try {
+            Native.stop()
+        } catch (e: Throwable) {
+            Util.appendLog(this, "Native.stop() threw (${e}); the native library may not have been loaded")
+        }
+        try {
+            connection?.close()
+        } catch (e: Exception) {
+            Util.appendLog(this, "closing the USB connection threw (${e})")
+        }
+        connection = null
+        releaseWakeLock()
+        synchronized(lock) {
+            state = State.WAITING
+            message = "Capture card unplugged - waiting to reconnect"
+        }
+        updateNotification("Waiting for the capture card to be reconnected")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -206,7 +273,7 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         try {
-            unregisterReceiver(detachReceiver)
+            unregisterReceiver(usbReceiver)
         } catch (e: Exception) {
             // not registered
         }

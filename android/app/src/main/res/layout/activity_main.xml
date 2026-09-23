@@ -110,6 +110,12 @@
         android:layout_height="wrap_content"
         android:text="Audio from the card" />
 
+      <CheckBox
+        android:id="@+id/autoReconnectCheck"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Automatically reconnect if the card is unplugged" />
+
       <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

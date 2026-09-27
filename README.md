@@ -24,7 +24,7 @@ Linux binary. See `.github/workflows/release.yml`.
 
     pkg install rust clang libuvc libusb
     cargo build --release          # links the libusb/libuvc you just installed; do not add --features android-static, that's for the Android build only (see android/README.md)
-    cargo test              # optional: 75 tests, none need USB hardware
+    cargo test              # optional: 78 tests, none need USB hardware
 
 Needs Rust 1.70 or newer.
 
@@ -132,6 +132,7 @@ touching the picture or sound quality, remux instead of re-encoding:
     src/feed.rs          the same stream as a short queue, for an encoder to pull from
                        (the Android app's H.264 recorder; live edge, old pictures dropped)
     src/jnitable.rs      the JNI function table, for the app to fill a Java array from here
+    src/contract.rs      checks the app's JNI declarations against this crate's, at build time
     src/protocols/       web.rs, rtsp.rs, mod.rs (plug-in point)
     src/jpeg.rs, rtp.rs  RTP/JPEG, L16, RTCP building blocks
     tests/unit/          unit tests, one file per module (e.g. hub.rs -> tests/unit/hub_tests.rs),

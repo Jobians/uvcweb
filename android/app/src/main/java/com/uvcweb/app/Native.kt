@@ -117,14 +117,18 @@ object Native {
     external fun feedVideoFps(): Double
 
     /**
-     * [frames, dropped, chunks, soundBytes, seconds, queued, queuedBytes, source].
+     * Fills [into] with [frames, dropped, chunks, soundBytes, seconds, queued,
+     * queuedBytes, source] and returns how many numbers it wrote, or 0 if it
+     * wrote none. The array is passed in rather than returned, because the
+     * native side does not create Java arrays - a returned one would come back
+     * null.
      *
      * [source] is how many pictures the card has sent this session, against
      * [frames] how many reached the reader - the gap between them is what says
      * whether the card has not started or the reader is missing the stream.
      */
     @JvmStatic
-    external fun feedStats(): LongArray
+    external fun feedStats(into: LongArray): Int
 
     fun describeError(code: Int): String = when (code) {
         1 -> "libuvc could not start"

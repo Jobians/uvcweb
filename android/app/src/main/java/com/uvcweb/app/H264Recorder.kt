@@ -301,16 +301,25 @@ object H264Recorder {
         }
         val now = System.currentTimeMillis()
         if (now >= deadline) {
-          val stats = Native.feedStats()
-          val sent = if (stats.size > 7) stats[7] else -1L
-          if (sent == 0L && now - started < CARD_START_MS) {
+          val stats = LongArray(8)
+          val written = Native.feedStats(stats)
+          val sent = if (written >= 8) stats[7] else -1L
+          val read = if (written >= 1) stats[0] else -1L
+          if (sent < 0) {
+            // The counts could not be read, so there is nothing to conclude from
+            // them and only the clock may end this.
+            if (now - started < CARD_START_MS) {
+              deadline = started + CARD_START_MS
+            } else {
+              throw IllegalStateException("no picture came from the card in ${now - started}ms")
+            }
+          } else if (sent == 0L && now - started < CARD_START_MS) {
             // Nothing has come out of the card at all, so it is still starting.
             log("the card has not sent a picture yet (${now - started}ms); waiting for it")
             deadline = started + CARD_START_MS
           } else {
             // Either the card is not sending at all, or it is and the reader is
             // missing it. Both belong in the log rather than in a guess.
-            val read = if (stats.isNotEmpty()) stats[0] else -1L
             log("no first picture after ${now - started}ms: the card has sent $sent, the reader has $read")
             throw IllegalStateException(
                 if (sent == 0L) "the card sent no pictures at all"
@@ -681,8 +690,8 @@ object H264Recorder {
         if (finished == null) part.delete() // nothing worth keeping
         // What the card sent against what went into the file: the difference is
         // either this phone being slow or the card's own mode being the limit.
-        val seen = Native.feedStats()
-        if (seen.size >= 4) {
+        val seen = LongArray(8)
+        if (Native.feedStats(seen) >= 4) {
           log("the card sent ${seen[0]} pictures and ${seen[2]} sound chunks, $frames were encoded")
         }
         if (tooEarly > 0) log("$tooEarly encoded sample(s) arrived before the file could be started")

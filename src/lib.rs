@@ -43,5 +43,8 @@ mod usbaudio;
 mod android;
 
 #[cfg(test)]
+mod contract;
+
+#[cfg(test)]
 #[path = "../tests/unit/golden_tests.rs"]
 mod golden_tests;

@@ -12,6 +12,10 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.util.Log
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * Records the session into an MP4 with the phone's own hardware H.264 encoder,
@@ -62,6 +66,14 @@ object H264Recorder {
   private const val MAX_WIDTH = 960
 
   private const val AUDIO_BITRATE = 128_000
+  /**
+   * The rate the sound is encoded at. A card that hands over 96 kHz is not
+   * asking for 96 kHz AAC: a phone's encoder usually says yes and then gives
+   * back 48 kHz, which leaves a file whose sound is a whistle on top of the
+   * speech. So 48 kHz is asked for, and a higher card rate is brought down to it
+   * first.
+   */
+  private const val SOUND_RATE = 48_000
   private const val I_FRAME_SECONDS = 2
   /** How long to wait for the card's first picture at the start. */
   private const val FIRST_PICTURE_MS = 3_000
@@ -180,9 +192,19 @@ object H264Recorder {
 
     private var audioHeld = 0
     private var audioAt = 0
-    private var audioHeldPts = 0L
-    private var audioRate = 0
-    private var audioChannels = 0
+    private var audioOutRate = 0
+    private var audioFrameBytes = 0
+    /**
+     * The card's sound on its way to the encoder. It is made even when the two
+     * rates are the same, in which case it is a single tap and the sound is
+     * passed along as it is.
+     */
+    private lateinit var down: Decimator
+    /** The resampled sound, between the card's rate and the encoder's. */
+    private val resampled = ByteArray(64 * 1024)
+    /** Where the sound now in flight starts, and where the rate it is timed from. */
+    private var audioPtsBase = 0L
+    private var audioPtsAt = 0L
     private var firstFrame: ByteArray? = null
     private var firstPts = 0L
     private var lastVideoPts = 0L
@@ -194,8 +216,11 @@ object H264Recorder {
     /**
      * Encoded samples that arrived before the file could be started, which can
      * only happen if a phone's encoder would not say what its output looks like.
+     * The moment of silence the sound encoder is given to say it does not count:
+     * that sound is at the very start and would be thrown away either way.
      */
     private var tooEarly = 0
+    private var primed = false
     @Volatile private var stopping = false
     @Volatile private var failure: String? = null
     private var videoEosQueued = false
@@ -251,8 +276,13 @@ object H264Recorder {
       }
       val rate = (fmt shr 32).toInt()
       val channels = (fmt and 0xFFFF).toInt()
+      // A rate that is a whole number of times SOUND_RATE is brought down to it,
+      // because that is the one number a phone's AAC encoder is certain to take.
+      val out =
+          if (rate > SOUND_RATE && rate % SOUND_RATE == 0) SOUND_RATE else rate
+      val resampler = Decimator(rate, out, channels)
       audio =
-          runCatching { makeAudioEncoder(rate, channels) }
+          runCatching { makeAudioEncoder(out, channels) }
               .getOrElse {
                 Log.w(TAG, "no sound encoder would start: ${it.message}")
                 null
@@ -262,8 +292,14 @@ object H264Recorder {
         return
       }
       audioDone = false
-      audioRate = rate
-      audioChannels = channels
+      audioOutRate = out
+      audioFrameBytes = channels * 2
+      down = resampler
+      if (out == rate) {
+        log("the card's sound is $rate Hz and is encoded at that rate")
+      } else {
+        log("the card's sound is $rate Hz, so it is brought down to $out Hz first")
+      }
       primeSound()
     }
 
@@ -280,13 +316,14 @@ object H264Recorder {
       val index = dequeueInput(codec, 500_000)
       if (index < 0) return
       val buffer = codec.getInputBuffer(index) ?: return
-      val size = minOf(buffer.capacity(), audioRate / 20 * audioChannels * 2) // 50ms
-      if (size < 2) return
+      val size = minOf(buffer.capacity(), audioOutRate / 20 * audioFrameBytes) // 50ms
+      if (size < audioFrameBytes) return
       buffer.clear()
       for (i in 0 until size) buffer.put(0)
       codec.queueInputBuffer(index, 0, size, 0L, 0)
       val deadline = System.currentTimeMillis() + 500
       while (audioTrack < 0 && System.currentTimeMillis() < deadline) drainAudio()
+      primed = true
     }
 
     private fun waitForFirstPicture(): ByteArray {
@@ -386,14 +423,21 @@ object H264Recorder {
 
     private fun takeSound() {
       val codec = audio ?: return
+      val filter = down
       if (audioHeld == 0) {
         if (Native.feedPeekPts(AUDIO) < 0) return
         val pts = Native.feedPeekPts(AUDIO)
         val n = audioBuf.read(AUDIO)
-        if (n <= 0) return
-        audioHeld = n
+        if (n < audioFrameBytes) return
+        // A frame that is only half there cannot be resampled, and the card
+        // always sends whole ones, so this only ever costs nothing.
+        audioHeld = n - n % audioFrameBytes
         audioAt = 0
-        audioHeldPts = pts
+        // The resampled sound is timed from this chunk's own clock and counted
+        // in frames, so a rate that does not divide evenly cannot drift, and a
+        // gap in the card's sound is a gap in the file.
+        audioPtsBase = pts
+        audioPtsAt = filter.frames
       }
       while (audioHeld > 0) {
         val index = dequeueInput(codec, 1_000_000)
@@ -401,16 +445,32 @@ object H264Recorder {
         // rather than being thrown away: the sound stays whole.
         if (index < 0) return
         val buffer = codec.getInputBuffer(index) ?: return
-        val size = minOf(buffer.capacity(), audioHeld)
-        buffer.clear()
-        buffer.put(audioBuf.bytes, audioAt, size)
+        val before = filter.frames
+        val (used, written) =
+            filter.convert(
+                audioBuf.bytes,
+                audioAt,
+                audioHeld,
+                resampled,
+                minOf(buffer.capacity(), resampled.size)
+            )
         // Every buffer carries the time of its own first sample, so a chunk that
-        // is handed over in pieces still lands where it belongs.
-        val at = audioHeldPts + audioAt * 8_000_000L / (audioRate.toLong() * audioChannels * 2)
-        audioAt += size
-        audioHeld -= size
-        codec.queueInputBuffer(index, 0, size, at, 0)
-        lastAudioPts = at
+        // is handed over in pieces still lands where it belongs. What was read
+        // is counted whether or not it turned into sound this time, since a part
+        // of a group waits inside the filter for the sound that follows it.
+        val at = audioPtsBase + (before - audioPtsAt) * 1_000_000L / audioOutRate
+        audioAt += used
+        audioHeld -= used
+        if (written == 0) {
+          // Nothing came out this time, so the buffer is handed straight back
+          // rather than held on to: the codec is waiting for it either way.
+          codec.queueInputBuffer(index, 0, 0, 0L, 0)
+          return
+        }
+        buffer.clear()
+        buffer.put(resampled, 0, written)
+        codec.queueInputBuffer(index, 0, written, at, 0)
+        lastAudioPts = at + written.toLong() / audioFrameBytes * 1_000_000L / audioOutRate
       }
     }
 
@@ -619,8 +679,20 @@ object H264Recorder {
         val index = codec.dequeueOutputBuffer(info, CODEC_TIMEOUT_US)
         when {
           index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+            val format = codec.outputFormat
+            // An encoder that answers with a rate other than the one it was asked
+            // for has made a file that will not play right, so it is said out loud.
+            val gave =
+                if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                  format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                } else {
+                  -1
+                }
+            if (gave != audioOutRate) {
+              log("the sound encoder gave $gave Hz for the $audioOutRate Hz it was asked for")
+            }
             if (audioTrack < 0) {
-              audioTrack = muxer.addTrack(codec.outputFormat)
+              audioTrack = muxer.addTrack(format)
               startMuxerIfReady()
             }
           }
@@ -632,7 +704,7 @@ object H264Recorder {
                 buffer.position(info.offset)
                 buffer.limit(info.offset + info.size)
                 muxer.writeSampleData(audioTrack, buffer, info)
-              } else {
+              } else if (primed) {
                 tooEarly++
               }
             }
@@ -689,16 +761,19 @@ object H264Recorder {
       } catch (e: Exception) {
         fail("the file could not be finished", e)
       } finally {
+        // What the card sent against what went into the file: the difference is
+        // either this phone being slow or the card's own mode being the limit.
+        // This has to be asked for while the card is still being listened to,
+        // because once it is disarmed there is nothing left to count.
+        val seen = LongArray(8)
+        val known = Native.feedStats(seen)
         // Nothing will be read from the card again, so it can stop copying.
         runCatching { Native.feedDisarm() }
         if (finished == null) part.delete() // nothing worth keeping
-        // What the card sent against what went into the file: the difference is
-        // either this phone being slow or the card's own mode being the limit.
-        val seen = LongArray(8)
-        if (Native.feedStats(seen) >= 4) {
+        if (known >= 4) {
           log("the card sent ${seen[0]} pictures and ${seen[2]} sound chunks, $frames were encoded")
         }
-        if (tooEarly > 0) log("$tooEarly encoded sample(s) arrived before the file could be started")
+        if (tooEarly > 0) log("$tooEarly encoded sample(s) were dropped, the file was not ready for them")
         if (session === this) session = null
         pending = Finished(finished, frames, seconds(), skipped, failure)
         dispose()
@@ -762,6 +837,144 @@ object H264Recorder {
           continue
         }
         return if (n > NOTHING) n else 0
+      }
+    }
+  }
+
+  // -------------------------------------------------------------- the sound
+
+  /**
+   * Brings a card's sound down to a rate the phone's encoder is certain to take,
+   * by taking every [factor] frames for one.
+   *
+   * A card that sends 96 kHz is not asking for 96 kHz AAC. The encoder will
+   * usually say yes, hand back 48 kHz in its output format, and the file plays
+   * the sound at the wrong speed with a whistle folded on top of it, because
+   * everything above 24 kHz has come back down as something else. So the rate
+   * is lowered first, and only by a whole number of times, so no fraction of a
+   * sample is ever invented.
+   *
+   * The filter is a 33-tap windowed sinc that keeps everything below 21.6 kHz
+   * and throws the rest away, and it carries its last frames from one call to
+   * the next, so a chunk boundary is a cut in the stream and not a step in it.
+   */
+  private class Decimator(inRate: Int, outRate: Int, private val channels: Int) {
+    /** Frames in for each frame out. */
+    val factor = inRate / outRate
+
+    /**
+     * The filter. A single tap when there is nothing to bring down, so that a
+     * card whose rate is already right goes through the same path untouched.
+     */
+    private val taps = if (factor > 1) windowedSinc(inRate, outRate) else floatArrayOf(1f)
+
+    /**
+     * The last frames in, oldest first, then the group arriving now, and then
+     * room for a group that was not all there and has to wait for the next call.
+     */
+    private val line = FloatArray((taps.size - 1 + 2 * factor - 1) * channels)
+
+    /** Frames held in [line] that are not yet in a whole group. */
+    private var spare = 0
+
+    /** Output frames handed out so far, which is what a timestamp is counted in. */
+    var frames = 0L
+      private set
+
+    /**
+     * Reads the whole frames in the [len] bytes of [inBuf] from [off] and writes
+     * the sound brought down into [out] as the little-endian samples the encoder
+     * takes, at most [outMax] bytes of it. Answers the bytes of [inBuf] it read
+     * and the bytes it wrote. A group that was not all there is held for the next
+     * call rather than thrown away, so that a chunk of any size at all gives the
+     * same sound as one of any other size.
+     */
+    fun convert(inBuf: ByteArray, off: Int, len: Int, out: ByteArray, outMax: Int): Pair<Int, Int> {
+      val frameBytes = channels * 2
+      val history = taps.size - 1
+      val there = history * channels
+      val avail = len / frameBytes
+      if (avail <= 0) return 0 to 0
+      val groups = minOf((spare + avail) / factor, outMax / frameBytes)
+      val forGroups = groups * factor - spare
+      // A part of one more group at most, so that a chunk which does not divide
+      // evenly leaves what it could not use here instead of losing it.
+      val tail = minOf(avail - forGroups, factor - 1 - spare).coerceAtLeast(0)
+      val wanted = forGroups + tail
+      if (wanted <= 0) return 0 to 0
+      var read = off
+      var held = spare
+      var written = 0
+      for (g in 0 until groups) {
+        // The group goes behind the frames the filter already holds, so that the
+        // window is the whole span one output frame is made of.
+        while (held < factor) {
+          for (c in 0 until channels) {
+            line[there + held * channels + c] = sampleAt(inBuf, read + c * 2)
+          }
+          held++
+          read += frameBytes
+        }
+        for (c in 0 until channels) {
+          var sum = 0f
+          // Tap zero is the newest frame, which is the last one of the group.
+          for (n in taps.indices) {
+            sum += taps[n] * line[(history + factor - 1 - n) * channels + c]
+          }
+          putSample(out, written, sum)
+          written += 2
+        }
+        // The oldest frames of the window have been used up, so the newest take
+        // their place and the next group starts from there.
+        System.arraycopy(line, factor * channels, line, 0, there)
+        held = 0
+      }
+      for (i in 0 until tail) {
+        for (c in 0 until channels) {
+          line[there + i * channels + c] = sampleAt(inBuf, read + c * 2)
+        }
+        read += frameBytes
+      }
+      spare = tail
+      frames += groups
+      return read - off to written
+    }
+
+    private fun sampleAt(buf: ByteArray, at: Int): Float =
+        ((buf[at].toInt() and 0xFF) or (buf[at + 1].toInt() shl 8)).toShort().toFloat()
+
+    /** One sample, rounded and clipped, as the two little-endian bytes it is. */
+    private fun putSample(out: ByteArray, at: Int, v: Float) {
+      val s = if (v > MAX_SAMPLE) MAX_SAMPLE else if (v < MIN_SAMPLE) MIN_SAMPLE else v.roundToInt()
+      out[at] = (s and 0xFF).toByte()
+      out[at + 1] = (s shr 8 and 0xFF).toByte()
+    }
+
+    companion object {
+      private const val TAPS = 33
+      private const val MAX_SAMPLE = 32_767
+      private const val MIN_SAMPLE = -32_768
+
+      /**
+       * A low-pass that keeps the sound and drops the part that would fold back
+       * down. The edge sits a little under half the lower rate, which is where
+       * nothing that anybody can hear has reached yet, and a Hamming window
+       * keeps the stopband far enough down that what does get through cannot be
+       * heard on its own.
+       */
+      private fun windowedSinc(inRate: Int, outRate: Int): FloatArray {
+        val cut = (0.45 * outRate / inRate).toFloat()
+        val taps = FloatArray(TAPS)
+        var total = 0f
+        for (i in 0 until TAPS) {
+          val x = i - (TAPS - 1) / 2
+          val sinc = if (x == 0) 2f * cut else (sin(2 * PI * cut * x) / (PI * x)).toFloat()
+          taps[i] = (sinc * (0.54 - 0.46 * cos(2 * PI * i / (TAPS - 1)))).toFloat()
+          total += taps[i]
+        }
+        // Normalised, so the sound comes out as loud as it went in.
+        for (i in 0 until TAPS) taps[i] /= total
+        return taps
       }
     }
   }

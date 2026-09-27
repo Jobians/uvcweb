@@ -153,6 +153,14 @@ generate_libusb_version_headers() {
   printf '#define LIBUSB_DESCRIBE "%s"\n' "$LIBUSB_REF" > "$dir/version_describe.h"
 }
 
+# Vendored android/config.h ships USE_SYSTEM_LOGGING_FACILITY=1; force it to 0.
+patch_libusb_config() {
+  local cfg="$1/android/config.h"
+  [ -f "$cfg" ] || die "missing $cfg"
+  sed -i.bak -E 's/^(#define USE_SYSTEM_LOGGING_FACILITY) 1$/\1 0/' "$cfg"
+  rm -f "$cfg.bak"
+}
+
 # ---------------------------------------------------------------- per-ABI build
 
 build_abi() {
@@ -209,6 +217,7 @@ check_files "$LIBUVC_DIR/src" libuvc LIBUVC_REF $uvc_files
 
 generate_libuvc_config_header "$LIBUVC_DIR"
 generate_libusb_version_headers "$LIBUSB_DIR"
+patch_libusb_config "$LIBUSB_DIR"
 
 for abi in $ABIS; do
   triple="$(abi_to_triple "$abi")"

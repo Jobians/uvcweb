@@ -14,8 +14,14 @@
 //!                                   webPort: Int, rtspPort: Int, avOffsetMs: Int): Int
 //!     @JvmStatic external fun stop()
 //!     @JvmStatic external fun isRunning(): Boolean
-//! }
+//!     @JvmStatic external fun startRecord(): Int
+//!     @JvmStatic external fun stopRecord(): Int
+//!     @JvmStatic external fun isRecording(): Boolean
+//!     @JvmStatic external fun recordFrames(): Int
+//!     @JvmStatic external fun recordSeconds(): Int
+//!     @JvmStatic external fun recordMegabytes(): Int
 //! ```
+
 //!
 //! Logging: the app sets the environment variable UVCWEB_LOG_FILE (android.system.Os.setenv)
 //! before `start`; lines also go to logcat under the tag "uvcweb".
@@ -33,6 +39,9 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 
 const ERR_ALREADY_RUNNING: i32 = -100;
 const ERR_PANIC: i32 = -101;
+const ERR_NOT_RUNNING: i32 = -102; // no session, so nothing to record from
+const ERR_BAD_DIR: i32 = -103; // the record directory could not be used
+const ERR_NO_FILES: i32 = -104; // the recording produced no file
 
 /// Returns 0 on success, otherwise the same error codes as the command line program's exit status:
 /// 1 uvc_init, 2 open/wrap (bad fd), 3 no such video mode, 4 streaming failed, 5 port in use;
@@ -113,5 +122,96 @@ pub extern "C" fn Java_com_uvcweb_app_Native_isRunning(
         1
     } else {
         0
+    }
+}
+
+/// Starts a recording of everything the session streams into the directory named by
+/// UVCWEB_RECORD_DIR (the app sets it before `start`).
+/// Returns 0 on success, otherwise one of the error codes above.
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_startRecord(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| match crate::recorder::start("") {
+        Ok(()) => 0,
+        Err(e) => {
+            say!("record asked for by the app: {}", e);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                ERR_ALREADY_RUNNING
+            } else if e.kind() == std::io::ErrorKind::NotConnected {
+                ERR_NOT_RUNNING
+            } else {
+                ERR_BAD_DIR
+            }
+        }
+    }))
+    .unwrap_or(ERR_PANIC)
+}
+
+/// Stops the recording, which writes the index and closes the file so a player accepts
+/// it. Returns how many pictures the recording holds, or a negative error code when
+/// there was nothing to close. The app can then look in its record directory for the
+/// new file.
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_stopRecord(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| match crate::recorder::stop() {
+        Some(sum) if !sum.files.is_empty() => {
+            say!("{}", sum.describe());
+            sum.frames.min(i32::MAX as u64) as i32
+        }
+        Some(_) => ERR_NO_FILES,
+        None => ERR_NOT_RUNNING,
+    }))
+    .unwrap_or(ERR_PANIC)
+}
+
+/// Whether a recording is running right now.
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_isRecording(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> u8 {
+    u8::from(crate::recorder::status().recording())
+}
+
+/// Pictures written into the running recording so far (0 when idle).
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_recordFrames(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> i32 {
+    match crate::recorder::status() {
+        crate::recorder::Status::Recording { frames, .. } => frames.min(i32::MAX as u64) as i32,
+        _ => 0,
+    }
+}
+
+/// Seconds the running recording has been going (0 when idle).
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_recordSeconds(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> i32 {
+    match crate::recorder::status() {
+        crate::recorder::Status::Recording { secs, .. } => secs.min(i32::MAX as u64) as i32,
+        _ => 0,
+    }
+}
+
+/// Megabytes written into the running recording so far (0 when idle).
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_recordMegabytes(
+    _env: *mut c_void,
+    _class: *mut c_void,
+) -> i32 {
+    match crate::recorder::status() {
+        crate::recorder::Status::Recording { bytes, .. } => {
+            (bytes / (1024 * 1024)).min(i32::MAX as u64) as i32
+        }
+        _ => 0,
     }
 }

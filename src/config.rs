@@ -14,6 +14,7 @@ pub struct Config {
     pub lan: bool,                     // listen on all interfaces instead of loopback
     pub protocols: Vec<(String, u16)>, // chosen protocols with their ports
     pub av_offset_ms: i32,             // RTSP: shift video timestamps later (+) / earlier (-)
+    pub record_dir: String,            // where the recorder puts its files; empty = its own default
 }
 
 impl Config {
@@ -31,6 +32,9 @@ impl Config {
             lan: false,
             protocols: vec![("web".to_string(), 8080)],
             av_offset_ms: 0,
+            // Empty, not "record": the recorder resolves its default later, so that
+            // UVCWEB_RECORD_DIR still applies unless -R names a folder.
+            record_dir: String::new(),
         }
     }
 }
@@ -50,7 +54,11 @@ pub fn usage() -> String {
     s.push_str("  -P LIST            protocols to serve, comma separated (default: web)\n");
     s.push_str("  -p [NAME=]PORT     port; use NAME=PORT when serving several protocols\n");
     s.push_str("  -l                 listen on the LAN too (no password!)\n");
-    s.push_str("  -o MS              RTSP audio/video offset in ms (+ = video later)\n\n");
+    s.push_str("  -o MS              RTSP audio/video offset in ms (+ = video later)\n");
+    s.push_str("  -R [DIR]           directory for recordings (default: record)\n");
+    s.push_str(
+        "                      start/stop them on the viewer page or with /record/start\n\n",
+    );
     s.push_str("available protocols:\n");
     for p in protocols::REGISTRY {
         s.push_str(&format!(
@@ -62,6 +70,7 @@ pub fn usage() -> String {
     s.push_str("  -w 640 -h 480 -f 30                 web viewer only\n");
     s.push_str("  -w 640 -h 480 -f 30 -P rtsp         RTSP only\n");
     s.push_str("  -w 640 -h 480 -f 30 -P web,rtsp -l  both, reachable from the LAN\n");
+    s.push_str("  -w 640 -h 480 -f 30 -R /sdcard/rec  recordings into /sdcard/rec\n");
     s
 }
 
@@ -98,6 +107,18 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
             "-ar" => cfg.audio_rate = num(take(args, &mut i, last, a)?, a)?,
             "-ac" => cfg.audio_channels = num(take(args, &mut i, last, a)?, a)?,
             "-o" => cfg.av_offset_ms = num(take(args, &mut i, last, a)?, a)?,
+            "-R" => {
+                // The value is optional: -R on its own means the default directory.
+                let v = if i + 1 < last && !args[i + 1].starts_with('-') {
+                    i += 1;
+                    args[i].as_str()
+                } else {
+                    ""
+                };
+                // A bare -R leaves it empty, which the recorder reads as "use the
+                // default", the same as not passing the option at all.
+                cfg.record_dir = v.to_string();
+            }
             "-l" => cfg.lan = true,
             "-a" => {
                 let v = take(args, &mut i, last, a)?;

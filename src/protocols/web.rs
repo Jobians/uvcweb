@@ -1,8 +1,9 @@
-//! HTTP protocol: viewer page, MJPEG stream, WAV audio stream, snapshot, status.
-//! Behaves like the C version (same URLs, same log lines).
+//! HTTP protocol: viewer page, MJPEG stream, WAV audio stream, snapshot, status,
+//! record start/stop. Behaves like the C version (same URLs, same log lines).
 
 use super::{serve_tcp, Ctx, Protocol};
 use crate::hub::Hub;
+use crate::recorder::{self, Status};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -29,7 +30,8 @@ impl Protocol for Web {
             }
         );
         let hub = ctx.hub.clone();
-        serve_tcp(&ctx.hub, listener, move |s| client(s, &hub));
+        let record_dir = ctx.cfg.record_dir.clone();
+        serve_tcp(&ctx.hub, listener, move |s| client(s, &hub, &record_dir));
         Ok(())
     }
 }
@@ -69,7 +71,7 @@ fn read_request_path(s: &mut TcpStream) -> Option<String> {
     Some(it.next()?.to_string())
 }
 
-fn client(mut s: TcpStream, hub: &Arc<Hub>) {
+fn client(mut s: TcpStream, hub: &Arc<Hub>, record_dir: &str) {
     let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
     let _ = s.set_nodelay(true);
@@ -109,6 +111,9 @@ fn client(mut s: TcpStream, hub: &Arc<Hub>) {
             }
         },
         "/status" => serve_status(&mut s, hub),
+        "/record/start" => record_start(&mut s, record_dir),
+        "/record/stop" => record_stop(&mut s),
+        "/record/status" => record_status(&mut s),
         "/favicon.ico" => reply(&mut s, "204 No Content", "text/plain", b""),
         _ => reply(&mut s, "404 Not Found", "text/plain", b"not found\n"),
     }
@@ -117,8 +122,25 @@ fn client(mut s: TcpStream, hub: &Arc<Hub>) {
 fn serve_status(s: &mut TcpStream, hub: &Arc<Hub>) {
     let st = hub.video_stats();
     let age = st.age.unwrap_or(-1.0);
+    // The recording numbers ride along with the rest, so the viewer page needs a
+    // single request per second.
+    let rec = match recorder::status() {
+        Status::Idle => "null".to_string(),
+        Status::Recording {
+            file,
+            frames,
+            bytes,
+            secs,
+        } => format!(
+            "{{\"file\":\"{}\",\"frames\":{},\"bytes\":{},\"secs\":{}}}",
+            one_line(&file),
+            frames,
+            bytes,
+            secs
+        ),
+    };
     let js = format!(
-        "{{\"frames\":{},\"fps\":{:.1},\"w\":{},\"h\":{},\"age\":{:.1},\"same\":{},\"clients\":{},\"audio\":{}}}",
+        "{{\"frames\":{},\"fps\":{:.1},\"w\":{},\"h\":{},\"age\":{:.1},\"same\":{},\"clients\":{},\"audio\":{},\"recording\":{},\"record\":{}}}",
         st.total,
         st.fps,
         st.w,
@@ -126,9 +148,74 @@ fn serve_status(s: &mut TcpStream, hub: &Arc<Hub>) {
         age,
         st.same,
         st.viewers,
-        if hub.audio_format().is_some() { 1 } else { 0 }
+        if hub.audio_format().is_some() { 1 } else { 0 },
+        rec != "null",
+        rec
     );
     reply(s, "200 OK", "application/json", js.as_bytes());
+}
+
+/// Start recording into the configured directory.
+fn record_start(s: &mut TcpStream, dir: &str) {
+    let js = match recorder::start(dir) {
+        Ok(()) => record_json(recorder::status()),
+        Err(e) => format!(
+            "{{\"ok\":false,\"error\":\"{}\"}}",
+            one_line(&e.to_string())
+        ),
+    };
+    say!("recording requested by a client");
+    reply(s, "200 OK", "application/json", js.as_bytes());
+}
+
+fn record_stop(s: &mut TcpStream) {
+    let done = recorder::stop();
+    let js = match done {
+        Some(sum) if !sum.files.is_empty() => format!(
+            "{{\"ok\":true,\"frames\":{},\"secs\":{:.1},\"files\":[{}]}}",
+            sum.frames,
+            sum.secs,
+            sum.files
+                .iter()
+                .map(|f| format!("\"{}\"", one_line(f)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Some(_) => "{\"ok\":true,\"frames\":0,\"files\":[]}".to_string(),
+        None => "{\"ok\":false,\"error\":\"not recording\"}".to_string(),
+    };
+    reply(s, "200 OK", "application/json", js.as_bytes());
+}
+
+fn record_status(s: &mut TcpStream) {
+    let js = match recorder::status() {
+        Status::Idle => "{\"ok\":true,\"recording\":false}".to_string(),
+        Status::Recording { .. } => record_json(recorder::status()),
+    };
+    reply(s, "200 OK", "application/json", js.as_bytes());
+}
+
+fn record_json(st: Status) -> String {
+    match st {
+        Status::Idle => "{\"ok\":true,\"recording\":false}".to_string(),
+        Status::Recording {
+            file,
+            frames,
+            bytes,
+            secs,
+        } => format!(
+            "{{\"ok\":true,\"recording\":true,\"file\":\"{}\",\"frames\":{},\"bytes\":{},\"secs\":{}}}",
+            one_line(&file),
+            frames,
+            bytes,
+            secs
+        ),
+    }
+}
+
+/// Keep a path or an error message on one line: it goes into a JSON string.
+fn one_line(text: &str) -> String {
+    text.replace(['\\', '"', '\n', '\r'], " ")
 }
 
 fn serve_stream(s: &mut TcpStream, hub: &Arc<Hub>) {

@@ -124,6 +124,7 @@ fn end_to_end_tcp_session() {
         lan: false,
         protocols: vec![],
         av_offset_ms: 0,
+        record_dir: String::new(),
     });
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()

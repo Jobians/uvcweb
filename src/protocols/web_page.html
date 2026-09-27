@@ -77,6 +77,15 @@
   button[hidden] {
     display: none;
   }
+  button:disabled {
+    opacity: 0.5;
+  }
+  /* While a recording runs the button turns red, so it reads at a glance. */
+  button.on {
+    color: #fff;
+    background: rgba(120, 0, 0, 0.85);
+    border-color: #f00;
+  }
 
   /* A phone held sideways has very little height: make the bar more compact. */
   @media (orientation: landscape) and (max-height: 500px) {
@@ -95,6 +104,7 @@
     <button id="btn-fullscreen" type="button">Full screen</button>
     <button id="btn-landscape" type="button">Landscape</button>
     <button id="btn-rotate" type="button">Rotate</button>
+    <button id="btn-record" type="button">Record</button>
     <button id="btn-hide" type="button">Hide</button>
   </div>
 </div>
@@ -107,8 +117,9 @@
 //   Full screen       browser full screen; the info bar hides itself
 //   Landscape         full screen + lock the phone to landscape (browsers that allow it)
 //   Rotate            turn the picture 90 degrees (for phones with auto-rotate switched off)
+//   Record            start or stop a recording on the server (the file goes to its record folder)
 //   Hide              hide the info bar
-//   keyboard          f = full screen, h = hide/show bar, r = rotate
+//   keyboard          f = full screen, h = hide/show bar, r = rotate, c = record
 //
 // URL option: /?lead=100 sets the audio buffer in milliseconds (lower = audio earlier).
 
@@ -316,6 +327,7 @@ var statusLine = document.getElementById('status');
 var fullscreenButton = document.getElementById('btn-fullscreen');
 var landscapeButton = document.getElementById('btn-landscape');
 var rotateButton = document.getElementById('btn-rotate');
+var recordButton = document.getElementById('btn-record');
 var hideButton = document.getElementById('btn-hide');
 
 var barHidden = loadSetting('hidden', '0') === '1';
@@ -400,6 +412,7 @@ function toggleLandscape() {
 function updateButtons() {
   fullscreenButton.textContent = fullscreenElement() ? 'Exit full screen' : 'Full screen';
   landscapeButton.textContent = landscapeLocked ? 'Auto-rotate' : 'Landscape';
+  updateRecordButton();
 }
 
 // Entering full screen hides the info bar; leaving it brings the bar back.
@@ -416,6 +429,7 @@ function onFullscreenChange() {
 fullscreenButton.addEventListener('click', toggleFullscreen);
 landscapeButton.addEventListener('click', toggleLandscape);
 rotateButton.addEventListener('click', rotateVideo);
+recordButton.addEventListener('click', toggleRecord);
 hideButton.addEventListener('click', toggleBar);
 document.addEventListener('fullscreenchange', onFullscreenChange);
 document.addEventListener('webkitfullscreenchange', onFullscreenChange);
@@ -438,8 +452,85 @@ document.addEventListener('keydown', function (event) {
     toggleBar();
   } else if (event.key === 'r') {
     rotateVideo();
+  } else if (event.key === 'c') {
+    toggleRecord();
   }
 });
+
+
+// ===========================================================================
+// Recording
+//
+// One button starts and stops a recording. The server writes the .avi file on the
+// machine it runs on, in its record folder, so the file does not care about this
+// page: reloading, a phone going to sleep or the stream reconnecting keeps it
+// running, and pressing stop is what writes the index and closes the file.
+// ===========================================================================
+
+var recording = false;
+
+function updateRecordButton() {
+  recordButton.textContent = recording ? 'Stop recording' : 'Record';
+  recordButton.classList.toggle('on', recording);
+}
+
+// A long path would push the status line around, so keep just the last piece.
+function shortName(path) {
+  var parts = String(path).split('/');
+  return parts[parts.length - 1] || String(path);
+}
+
+function folderOf(path) {
+  var text = String(path);
+  return text.slice(0, text.lastIndexOf('/')) || text;
+}
+
+function recordSize(bytes) {
+  return bytes >= 1048576
+    ? (bytes / 1048576).toFixed(1) + ' MB'
+    : Math.round(bytes / 1024) + ' kB';
+}
+
+function recordRequest(path) {
+  return fetch(path).then(function (response) {
+    return response.json();
+  }).then(function (info) {
+    // The server answers 200 even when it says no, so `ok` is what counts.
+    if (!info.ok) {
+      throw new Error(info.error || 'the server refused');
+    }
+    return info;
+  });
+}
+
+function toggleRecord() {
+  recordButton.disabled = true;          // one request at a time
+  recordRequest(recording ? '/record/stop' : '/record/start')
+    .then(function (info) {
+      if (recording) {
+        recording = false;
+        if (info.frames) {
+          var where = info.files.length > 1
+            ? info.files.length + ' files in ' + folderOf(info.files[0])
+            : shortName(info.files[0]);
+          showNote('saved ' + info.frames + ' frames (' + info.secs + ' s) to ' + where);
+        } else {
+          showNote('the recording was empty, no file was written');
+        }
+      } else {
+        recording = true;
+        showNote('recording to ' + shortName(info.file));
+      }
+      updateRecordButton();
+    })
+    .catch(function (error) {
+      showNote('recording: ' + error.message);
+    })
+    .then(function () {
+      recordButton.disabled = false;
+      refreshStatus();                   // show the real numbers right away
+    });
+}
 
 
 // ===========================================================================
@@ -467,6 +558,15 @@ function refreshStatus() {
     } else if (audioState === 'on') {
       text += ' - audio on';
     }
+    if (status.record) {
+      recording = true;
+      text += ' - recording ' + recordSize(status.record.bytes) + ', ' +
+              Math.round(status.record.secs) + ' s, ' + status.record.frames + ' frames';
+    } else {
+      // Someone else (the command line, a second page) may have stopped it.
+      recording = false;
+    }
+    updateRecordButton();
     if (Date.now() < noteUntil) {
       text += ' - ' + noteText;
     }

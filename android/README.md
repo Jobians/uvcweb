@@ -54,8 +54,8 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 2. Choose Web viewer and/or RTSP, ports, and the video mode (0 x 0 = the card's default).
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
-4. **Open viewer** shows the web page full screen inside the app (rotate, landscape and hide buttons work
-   there too). Other apps can use the URLs shown under the status line, e.g. VLC on `rtsp://127.0.0.1:8554/live`.
+4. **Record** records the picture and sound into `.avi` files (see below). **Open viewer** shows the web
+   page full screen inside the app (rotate, landscape, record and hide buttons work there too). Other apps can use the URLs shown under the status line, e.g. VLC on `rtsp://127.0.0.1:8554/live`.
 5. "Allow other devices on the network" makes the servers reachable from your LAN (no password),
    and also advertises them over mDNS/Bonjour under the name shown in that same field (default
    "uvcweb", editable). Other devices can find it by name instead of typing the IP address - for
@@ -63,6 +63,22 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
    only; the Termux program has no mDNS support.
 
 The log at the bottom is the same log as the Termux program prints.
+
+### Recording
+
+**Record** writes what the card streams to `.avi` files: the card's own JPEGs (`MJPG`) and
+its audio as raw PCM, so nothing is re-encoded.
+
+* The button turns into **Stop recording** while one runs, and the status line shows how
+  long it has been going, how many pictures and how many MB. Pressing it again writes the
+  index and closes the file, which is what makes the file playable.
+* Files land in the app's own storage: `Android/data/com.uvcweb.app/files/record/` (or the
+  internal files folder if the device has no external storage). A file manager can open
+  that folder; the app has no screen for playing recordings back.
+* A long recording is split every 5 minutes or 1.5 GB, so one dropped recording is not one
+  broken file. `ffmpeg -i FILE.avi -c copy out.mp4` turns a recording into a smaller MP4
+  without re-encoding it.
+* The viewer page's Record button does the same thing over HTTP, so both can be used.
 
 ## If something does not work
 
@@ -72,6 +88,8 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
 * `build-rust.sh` linker errors mentioning `libusb_*` or `uvc_*`: the static archive was not found or is for
   another CPU type. `cargo` should print `-L .../native-deps/<abi>/lib`.
 * App: "could not open the capture card": permission dialog refused, or the card was unplugged.
+* App: "the record folder could not be used - see the log": the phone's storage is full, or the app's
+  external folder is gone (moved to another card). The log line names the folder that failed.
 * Log says `USB audio: cannot claim interface ... BUSY`: Android's own USB audio driver holds the audio
   interface; the video will still work.
 * Adjust the Gradle / Android Gradle Plugin versions in `build.gradle.kts` if your Android Studio asks you to.
@@ -83,6 +101,6 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
     app/src/main/java/com/uvcweb/app/
         Native.kt          the JNI functions (must match ../src/android.rs)
         CaptureService.kt  foreground service: owns the USB connection and the Rust engine
-        MainActivity.kt    settings, permissions, Start/Stop, status and log
+        MainActivity.kt    settings, permissions, Start/Stop, Record, status and log
         ViewerActivity.kt  the web viewer page in a full-screen WebView
         Settings.kt, Util.kt

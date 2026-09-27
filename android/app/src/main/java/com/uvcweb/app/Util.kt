@@ -25,6 +25,23 @@ object Util {
      * same file, so the app's on-screen log is one unified timeline instead of two separate ones. */
     const val LOG_NAME = "uvcweb.log"
 
+    /** Folder name for recordings, inside the app's own storage (see [recordDir]). */
+    const val RECORD_DIR_NAME = "record"
+
+    /**
+     * Where recordings go. The app's external files folder is preferred over the internal
+     * one: it needs no permission and a file manager can show the .avi files, so a recording
+     * can actually be found afterwards. Falls back to the internal folder on a device with
+     * no external storage mounted.
+     *
+     * The Rust side learns this folder through the UVCWEB_RECORD_DIR environment variable,
+     * set by [CaptureService] before the engine starts.
+     */
+    fun recordDir(context: Context): File {
+        val root = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(root, RECORD_DIR_NAME)
+    }
+
     private val logLock = Any()
     private val stampFormat get() = SimpleDateFormat("HH:mm:ss", Locale.US)
 

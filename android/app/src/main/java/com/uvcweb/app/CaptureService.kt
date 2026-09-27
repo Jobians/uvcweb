@@ -183,6 +183,18 @@ class CaptureService : Service() {
             Util.appendLog(this, "could not set UVCWEB_LOG_FILE (${e}); the Rust side will only log to Logcat")
         }
 
+        // Recordings go into the app's own storage folder, named for the Rust recorder to find.
+        val recordDir = Util.recordDir(this)
+        try {
+            recordDir.mkdirs()
+            Os.setenv("UVCWEB_RECORD_DIR", recordDir.absolutePath, true)
+            Util.appendLog(this, "recordings will go to ${recordDir.absolutePath}")
+        } catch (e: Exception) {
+            // Recording is optional: without the variable the recorder falls back to its own
+            // default folder, which is likely to fail, but serving video must not be affected.
+            Util.appendLog(this, "could not set UVCWEB_RECORD_DIR (${e}); recording may not work")
+        }
+
         // Hand the untouched file descriptor to libusb, exactly like `termux-usb -e` does.
         val code = Native.start(
             conn.fileDescriptor,

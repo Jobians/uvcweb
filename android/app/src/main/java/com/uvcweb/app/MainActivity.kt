@@ -47,6 +47,7 @@ class MainActivity : Activity() {
   private lateinit var fpsEdit: EditText
   private lateinit var startButton: Button
   private lateinit var viewerButton: Button
+  private lateinit var recordButton: Button
   private lateinit var statusText: TextView
   private lateinit var urlText: TextView
   private lateinit var logText: TextView
@@ -98,6 +99,7 @@ class MainActivity : Activity() {
     fpsEdit = findViewById(R.id.fpsEdit)
     startButton = findViewById(R.id.startButton)
     viewerButton = findViewById(R.id.viewerButton)
+    recordButton = findViewById(R.id.recordButton)
     statusText = findViewById(R.id.statusText)
     urlText = findViewById(R.id.urlText)
     logText = findViewById(R.id.logText)
@@ -120,6 +122,9 @@ class MainActivity : Activity() {
     }
     viewerButton.setOnClickListener {
       startActivity(Intent(this, ViewerActivity::class.java))
+    }
+    recordButton.setOnClickListener {
+      onRecordClicked()
     }
     registerPrivateReceiver(usbPermissionReceiver, IntentFilter(ACTION_USB_PERMISSION))
   }
@@ -260,6 +265,45 @@ class MainActivity : Activity() {
     startForegroundService(intent)
   }
 
+  // ------------------------------------------------------------------ recording
+
+  /**
+   * Starts or stops a recording. Both calls only touch a few locks and spawn or join a
+   * handful of threads, so they are quick enough for the main thread; the recording itself
+   * runs in the Rust library, not here.
+   */
+  private fun onRecordClicked() {
+    if (CaptureService.state != CaptureService.State.RUNNING) {
+      toast("Start the camera first - there is nothing to record yet")
+      return
+    }
+    val dir = Util.recordDir(this)
+    if (Native.isRecording()) {
+      val frames = Native.stopRecord()
+      if (frames >= 0) {
+        toast("Saved $frames frames to ${dir.absolutePath}")
+        Util.appendLog(this, "recording stopped: $frames frames in ${dir.absolutePath}")
+      } else {
+        toast(Native.describeError(frames))
+      }
+    } else {
+      val code = Native.startRecord()
+      if (code == 0) {
+        toast("Recording to ${dir.absolutePath}")
+      } else {
+        toast(Native.describeError(code))
+      }
+    }
+    refreshStatus()
+  }
+
+  private fun recordSuffix(): String {
+    if (!Native.isRecording()) return ""
+    val total = Native.recordSeconds()
+    return ": recording %d:%02d, %d frames, %d MB"
+        .format(total / 60, total % 60, Native.recordFrames(), Native.recordMegabytes())
+  }
+
   // ------------------------------------------------------------------ status display
 
   private fun refreshStatus() {
@@ -268,14 +312,17 @@ class MainActivity : Activity() {
 
     val state = CaptureService.state
     startButton.text = if (state == CaptureService.State.STOPPED) "Start" else "Stop"
+    val running = state == CaptureService.State.RUNNING
     statusText.text = when (state) {
       CaptureService.State.STOPPED -> "Stopped" + messageSuffix()
       CaptureService.State.STARTING -> "Starting..."
-      CaptureService.State.RUNNING -> "Running"
+      CaptureService.State.RUNNING -> "Running" + recordSuffix()
       CaptureService.State.WAITING -> CaptureService.message
     }
 
-    val running = state == CaptureService.State.RUNNING
+    val recording = running && Native.isRecording()
+    recordButton.isEnabled = running
+    recordButton.text = if (recording) "Stop recording" else "Record"
     val settings = readSettings()
     viewerButton.isEnabled = running && settings.web
     urlText.text = if (running) buildUrlText(settings) else ""

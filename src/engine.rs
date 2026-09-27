@@ -81,6 +81,8 @@ impl Engine {
 
     /// Stop everything and wait until the ports are free and the camera is released.
     pub fn stop(mut self) {
+        // Close an open recording first, so its file gets its final sizes and index.
+        crate::recorder::stop_quietly();
         self.hub.request_stop();
         if let Some(t) = self.supervisor.take() {
             let _ = t.join();

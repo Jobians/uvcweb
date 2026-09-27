@@ -12,6 +12,7 @@
 //!   capture / usbaudio   read the card, publish into the hub
 //!   hub                  latest picture + audio queue; protocols subscribe here
 //!   protocols            one file per protocol (web, rtsp); protocols/mod.rs is the plug-in point
+//!   recorder             one more subscriber: writes the pictures + audio into an AVI file
 //!   jpeg / rtp           RTP/JPEG + RTP L16 + RTCP building blocks for RTP based protocols
 //!   engine               start / stop / supervise one capture session
 
@@ -21,6 +22,7 @@ pub mod config;
 pub mod engine;
 pub mod hub;
 pub mod protocols;
+pub mod recorder;
 
 mod capture;
 mod descriptors;

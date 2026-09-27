@@ -24,7 +24,7 @@ Linux binary. See `.github/workflows/release.yml`.
 
     pkg install rust clang libuvc libusb
     cargo build --release          # links the libusb/libuvc you just installed; do not add --features android-static, that's for the Android build only (see android/README.md)
-    cargo test              # optional: 24 tests, none need USB hardware
+    cargo test              # optional: 56 tests, none need USB hardware
 
 Needs Rust 1.70 or newer.
 
@@ -45,6 +45,7 @@ Old command lines keep working (`-a usb`, `-p 8081`, ...). `--help` lists everyt
 | `-p [NAME=]PORT` | port; `web` = 8080, `rtsp` = 8554. With several protocols use `-p rtsp=9000` |
 | `-l` | listen on the LAN too (no password!) |
 | `-o MS` | RTSP: shift video timestamps by MS milliseconds (+ = video later) if lip-sync is off |
+| `-R [DIR]` | folder for recordings (default `record`); start and stop them from the viewer page or with `/record/start` |
 
 ## Watching
 
@@ -52,7 +53,8 @@ Old command lines keep working (`-a usb`, `-p 8081`, ...). `--help` lists everyt
   * Tap the picture to hide / show the info bar. **Full screen** hides it automatically.
   * **Landscape** goes full screen and locks the phone to landscape (where the browser allows it).
   * **Rotate** turns the picture 90 degrees each press, for phones with auto-rotate switched off.
-  * Keyboard: `f` full screen, `h` hide/show the bar, `r` rotate. Rotate and hide are remembered.
+  * **Record** starts and stops a recording (see below); the button turns red while one runs.
+  * Keyboard: `f` full screen, `h` hide/show the bar, `r` rotate, `c` record. Rotate and hide are remembered.
   * `/?lead=60` makes the audio arrive earlier (milliseconds of buffer; default 100).
 * RTSP: `rtsp://127.0.0.1:8554/live`
   * VLC (Android / desktop): *Open network stream*.
@@ -62,6 +64,39 @@ Old command lines keep working (`-a usb`, `-p 8081`, ...). `--help` lists everyt
 RTSP video is RTP/JPEG (RFC 2435, baseline 4:2:2 or 4:2:0 up to 2040 px wide/high) and
 audio is RTP L16 (uncompressed PCM). Video and audio carry RTCP sender reports so players sync them.
 If the card's JPEGs can't be sent this way you get a clear log line instead of garbage.
+
+## Recording
+
+The **Record** button on the viewer page (or `c` on the keyboard) records what the card
+streams into `.avi` files: the card's own JPEGs as-is (`MJPG`) and its audio as raw PCM,
+so nothing is re-encoded and a recording costs almost no CPU.
+
+* Files go to `record/` in the working directory, or wherever `-R DIR` / the environment
+  variable `UVCWEB_RECORD_DIR` points. The name carries the start time, e.g.
+  `record/rec-20260927-153422.avi`.
+* A long recording is split into several files, at 5 minutes or 1.5 GB, whichever comes
+  first. Each file stands on its own, so a dropped recording is never one broken file.
+* Pressing stop (or stopping the program) writes the index and closes the file, which is
+  what makes it playable. **A recording that is not closed is not playable**, so the
+  engine closes it on the way out too.
+* Picture is the priority: if writing to the card or SD card cannot keep up, video frames
+  are dropped instead of buffering (a slow card would otherwise pile up frames and end up
+  seconds behind the audio). Audio gaps are counted and logged.
+
+From scripts:
+
+    curl http://127.0.0.1:8080/record/start     # {"ok":true,"recording":true,"file":"record/rec-....avi",...}
+    curl http://127.0.0.1:8080/record/status    # what is being recorded right now
+    curl http://127.0.0.1:8080/record/stop      # {"ok":true,"frames":900,"secs":30.0,"files":["record/rec-....avi"]}
+    curl http://127.0.0.1:8080/status           # the stream status, plus "record": {...} while recording
+
+`/status` carries a `record` object (`file`, `frames`, `bytes`, `secs`) while a recording
+runs, so a page can show the progress without a second request.
+
+`ffmpeg`, `ffplay` and VLC play these files as they are. To get a smaller MP4 without
+touching the picture or sound quality, remux instead of re-encoding:
+
+    ffmpeg -i record/rec-20260927-153422.avi -c copy out.mp4
 
 ## Adding a protocol
 
@@ -84,6 +119,7 @@ If the card's JPEGs can't be sent this way you get a clear log line instead of g
     src/usbaudio.rs      libusb isochronous audio capture
     src/descriptors.rs   USB descriptor parsing (pure, unit tested)
     src/hub.rs           latest picture + audio queue; publish/subscribe
+    src/recorder.rs      recording: JPEG+PCM straight into .avi (subscribes to the hub)
     src/protocols/       web.rs, rtsp.rs, mod.rs (plug-in point)
     src/jpeg.rs, rtp.rs  RTP/JPEG, L16, RTCP building blocks
     tests/unit/          unit tests, one file per module (e.g. hub.rs -> tests/unit/hub_tests.rs),

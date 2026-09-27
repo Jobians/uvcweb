@@ -32,6 +32,26 @@ pub fn stamp() -> String {
     }
 }
 
+/// Local wall-clock time as YYYYMMDD-HHMMSS, for file names (e.g. recordings).
+pub fn file_stamp() -> String {
+    let mut tm = [0i64; 8];
+    let mut t: i64 = 0;
+    unsafe {
+        time(&mut t);
+        localtime_r(&t, tm.as_mut_ptr() as *mut c_void);
+        let p = tm.as_ptr() as *const i32;
+        format!(
+            "{:04}{:02}{:02}-{:02}{:02}{:02}",
+            *p.add(5) + 1900, // tm_year
+            *p.add(4) + 1,    // tm_mon
+            *p.add(3),        // tm_mday
+            *p.add(2),
+            *p.add(1),
+            *p
+        )
+    }
+}
+
 /// (Re)open the log file named by $UVCWEB_LOG_FILE. Called at the start of every session.
 pub fn init_file_from_env() {
     let mut g = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());

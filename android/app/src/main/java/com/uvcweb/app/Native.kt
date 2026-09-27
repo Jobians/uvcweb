@@ -40,6 +40,39 @@ object Native {
     @JvmStatic
     external fun isRunning(): Boolean
 
+    /**
+     * Starts recording everything the session streams into the folder named by the
+     * environment variable UVCWEB_RECORD_DIR (see CaptureService).
+     * Returns 0 on success, otherwise [describeError].
+     * The first picture is what creates the file, so a recording started before the
+     * camera streams has nothing to save yet.
+     */
+    @JvmStatic
+    external fun startRecord(): Int
+
+    /**
+     * Stops the recording, which writes the index and closes the file so a player
+     * accepts it. Returns the number of pictures it holds, or [describeError].
+     */
+    @JvmStatic
+    external fun stopRecord(): Int
+
+    /** Whether a recording is running right now. */
+    @JvmStatic
+    external fun isRecording(): Boolean
+
+    /** Pictures written into the running recording so far (0 when idle). */
+    @JvmStatic
+    external fun recordFrames(): Int
+
+    /** Seconds the running recording has been going (0 when idle). */
+    @JvmStatic
+    external fun recordSeconds(): Int
+
+    /** Megabytes written into the running recording so far (0 when idle). */
+    @JvmStatic
+    external fun recordMegabytes(): Int
+
     fun describeError(code: Int): String = when (code) {
         1 -> "libuvc could not start"
         2 -> "could not open the capture card (permission missing, or unplugged?)"
@@ -48,6 +81,9 @@ object Native {
         5 -> "a network port is already in use - pick another port"
         -100 -> "already running"
         -101 -> "internal error (see the log)"
+        -102 -> "the camera is not running, so there is nothing to record"
+        -103 -> "the record folder could not be used - see the log"
+        -104 -> "the recording was empty, so no file was written"
         else -> "error $code"
     }
 }

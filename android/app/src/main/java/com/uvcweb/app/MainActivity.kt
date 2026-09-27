@@ -303,7 +303,7 @@ class MainActivity : Activity() {
             else Native.describeError(code))
       }
       recordingBusy = false
-      refreshStatus()
+      onMain { refreshStatus() }
     }.start()
   }
 
@@ -337,13 +337,21 @@ class MainActivity : Activity() {
         show(message)
       }
       recordingBusy = false
-      refreshStatus()
+      onMain { refreshStatus() }
     }.start()
   }
 
-  /** Runs `what` on the main thread, because everything here started on another one. */
+  /**
+   * Hands something to the main thread, which is the only one that may touch a
+   * view. The record buttons do their work on a thread of their own, so every
+   * word they say about it comes back through here.
+   */
+  private fun onMain(what: () -> Unit) {
+    handler.post(what)
+  }
+
   private fun show(message: String) {
-    runOnUiThread { toast(message) }
+    onMain { toast(message) }
   }
 
   private fun recordSuffix(): String {

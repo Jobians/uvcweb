@@ -68,7 +68,17 @@ object H264Recorder {
    * is worth it.
    */
   private const val SOUND_GRACE_MS = 400
-  private const val IDLE_SLEEP_MS = 3L
+    /**
+     * A card that has not sent a single picture yet is a card that is still
+     * starting, not a card that is broken: the session reports itself running
+     * before the first frame comes out of the USB pipe, and on a phone that
+     * takes a few seconds. So a wait that runs out with nothing sent at all is
+     * given longer, while one that runs out with the card already sending is a
+     * fault and is reported as one.
+     */
+    private const val CARD_START_MS = 6_000L
+    private const val IDLE_SLEEP_MS = 3L
+
   /** How long the encoders are given to flush what they hold at the end. */
   private const val STOP_WAIT_MS = 20_000L
   private const val CODEC_TIMEOUT_US = 10_000L
@@ -276,8 +286,9 @@ object H264Recorder {
     }
 
     private fun waitForFirstPicture(): ByteArray {
-      val deadline = System.currentTimeMillis() + FIRST_PICTURE_MS
-      while (System.currentTimeMillis() < deadline) {
+      val started = System.currentTimeMillis()
+      var deadline = started + FIRST_PICTURE_MS
+      while (true) {
         if (Native.feedPeekPts(VIDEO) >= 0) {
           val pts = Native.feedPeekPts(VIDEO)
           val n = videoBuf.read(VIDEO)
@@ -288,9 +299,26 @@ object H264Recorder {
         } else if (Native.feedEnded()) {
           throw IllegalStateException("the camera stopped before the first picture")
         }
+        val now = System.currentTimeMillis()
+        if (now >= deadline) {
+          val stats = Native.feedStats()
+          val sent = if (stats.size > 7) stats[7] else -1L
+          if (sent == 0L && now - started < CARD_START_MS) {
+            // Nothing has come out of the card at all, so it is still starting.
+            log("the card has not sent a picture yet (${now - started}ms); waiting for it")
+            deadline = started + CARD_START_MS
+          } else {
+            // Either the card is not sending at all, or it is and the reader is
+            // missing it. Both belong in the log rather than in a guess.
+            val read = if (stats.isNotEmpty()) stats[0] else -1L
+            log("no first picture after ${now - started}ms: the card has sent $sent, the reader has $read")
+            throw IllegalStateException(
+                if (sent == 0L) "the card sent no pictures at all"
+                else "the card is sending ($sent pictures) but none reached the recorder")
+          }
+        }
         Thread.sleep(IDLE_SLEEP_MS)
       }
-      throw IllegalStateException("no picture came from the card")
     }
 
     // ------------------------------------------------------------- the thread

@@ -270,6 +270,11 @@ fn a_reader_sees_the_formats_an_encoder_needs() {
         feed::video_fps() >= 0.0,
         "a picture rate, or 0 before the first"
     );
+    // What the card has sent, so a reader that gets nothing can say whether the
+    // card is silent or the reader is.
+    assert_eq!(feed::stats().source, 0, "the card has sent nothing yet");
+    hub.submit_frame(&jpegish(2000, 60), 64, 48);
+    wait_for("the card's own count", || feed::stats().source > 0);
     feed::disarm();
     // Once the reader is gone there is nothing to ask.
     assert!(feed::audio_format().is_none());
@@ -323,5 +328,24 @@ fn a_reader_never_holds_up_the_stream() {
     );
     assert_eq!(hub.video_stats().total, 200, "every picture was taken");
     wait_for("the feed to see them", || feed::stats().frames > 0);
+    feed::disarm();
+}
+
+/// A session that was already streaming when the reader attached, which is what
+/// the app does: the camera has been running for a while before Record is tapped.
+#[test]
+fn a_reader_attaching_to_a_running_session_gets_the_current_picture() {
+    let _guard = one_reader();
+    let hub = a_hub();
+    for i in 0..30 {
+        hub.submit_frame(&jpegish(2000, 100 + i), 1920, 1080);
+    }
+    feed::arm_with(&hub).expect("arm");
+    wait_for("a picture from the running session", || {
+        feed::peek_pts(feed::VIDEO) >= 0
+    });
+    let mut buf = vec![0u8; 512 * 1024];
+    let n = feed::pull(feed::VIDEO, &mut buf);
+    assert!(n > 0, "a picture came out");
     feed::disarm();
 }

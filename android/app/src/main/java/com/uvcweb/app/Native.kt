@@ -116,7 +116,13 @@ object Native {
     @JvmStatic
     external fun feedVideoFps(): Double
 
-    /** [frames, dropped, chunks, soundBytes, seconds, queued, queuedBytes]. */
+    /**
+     * [frames, dropped, chunks, soundBytes, seconds, queued, queuedBytes, source].
+     *
+     * [source] is how many pictures the card has sent this session, against
+     * [frames] how many reached the reader - the gap between them is what says
+     * whether the card has not started or the reader is missing the stream.
+     */
     @JvmStatic
     external fun feedStats(): LongArray
 

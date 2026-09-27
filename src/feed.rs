@@ -166,6 +166,11 @@ fn with_feed<T>(f: impl FnOnce(&Arc<Feed>) -> T, or: T) -> T {
 /// Live numbers, for the app's status line.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Stats {
+    /// Pictures the card itself has delivered this session. The gap between
+    /// this and `frames` is the whole diagnosis when a reader gets nothing: a
+    /// `source` of 0 means the card has not started sending, while a `source`
+    /// that grows under a `frames` of 0 means the reader missed the stream.
+    pub source: u64,
     pub frames: u64,
     pub dropped: u64,
     pub chunks: u64,
@@ -216,6 +221,13 @@ pub fn arm_with(hub: &Arc<Hub>) -> io::Result<()> {
     };
     *lock(&feed.thread) = Some(handle);
     *slot = Some(feed);
+    // What the card has sent by now decides what happens next: a reader that
+    // attaches before the card's first picture has to wait for one, and the
+    // app needs to be able to tell that from a reader that missed the stream.
+    say!(
+        "the encoder feed attached: the card has sent {} picture(s) so far",
+        hub.video_stats().total
+    );
     Ok(())
 }
 
@@ -288,6 +300,9 @@ pub fn video_fps() -> f64 {
 pub fn stats() -> Stats {
     with_feed(
         |f| {
+            // Counted before the queue is locked, so this cannot end up holding
+            // two locks at once (the hub's and the feed's).
+            let source = f.hub.video_stats().total;
             // One lock, not two: the guards would overlap inside the expression
             // and a mutex cannot be taken twice.
             let (queued, queued_bytes) = {
@@ -295,6 +310,7 @@ pub fn stats() -> Stats {
                 (q.items.len() as u64, q.bytes as u64)
             };
             Stats {
+                source,
                 frames: f.frames.load(Ordering::Relaxed),
                 dropped: f.dropped.load(Ordering::Relaxed),
                 chunks: f.chunks.load(Ordering::Relaxed),

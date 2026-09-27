@@ -296,7 +296,7 @@ class MainActivity : Activity() {
       } else {
         // A phone without a usable encoder still gets a recording, just a bigger
         // one: the card's own pictures, written untouched into an AVI.
-        Util.appendLog(this, "no H.264 encoder here ($problem); writing AVI instead")
+        Util.appendLog(this, "MP4 recording would not start ($problem); writing AVI instead")
         val code = Native.startRecord()
         show(
             if (code == 0) "Recording ${dir.absolutePath} as AVI"

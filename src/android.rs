@@ -69,6 +69,7 @@ fn jni_table_ok(env: *mut c_void) -> bool {
     }
     if unsafe { jnitable::table_is_sane(env) } {
         TABLE_IS_SANE.store(true, Ordering::Relaxed);
+        return true;
     }
     false
 }
@@ -377,8 +378,10 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedVideoFps(
     catch_unwind(AssertUnwindSafe(feed::video_fps)).unwrap_or(0.0)
 }
 
-/// `[frames, dropped, chunks, soundBytes, secs, queued, queuedBytes]`, the
-/// numbers the app shows while it is recording.
+/// `[frames, dropped, chunks, soundBytes, secs, queued, queuedBytes, source]`,
+/// the numbers the app shows while it is recording. `source` is how many
+/// pictures the card itself has sent, which is what tells a reader that is
+/// waiting on a card that has not started from one that is missing the stream.
 #[no_mangle]
 pub extern "C" fn Java_com_uvcweb_app_Native_feedStats(
     env: *mut c_void,
@@ -399,6 +402,7 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedStats(
             st.secs as i64,
             st.queued as i64,
             st.queued_bytes as i64,
+            st.source as i64,
         ];
         let room = unsafe { jnitable::array_length(env, out) };
         if room < numbers.len() as i32 {

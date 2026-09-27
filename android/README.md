@@ -100,6 +100,12 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
 * `build-native-deps.sh` compile errors: libusb / libuvc versions. `LIBUSB_REF` / `LIBUVC_REF` select the tags.
 * `build-rust.sh` linker errors mentioning `libusb_*` or `uvc_*`: the static archive was not found or is for
   another CPU type. `cargo` should print `-L .../native-deps/<abi>/lib`.
+* Record produces an AVI instead of an MP4, with `no picture came from the card` in the log: the
+  reader waits for the card's first picture before it can configure an encoder, and that wait ran
+  out. The log now says how many pictures the card has sent (`the encoder feed attached: the card
+  has sent N picture(s) so far`, and again if the wait gives up). `0` there means the card had not
+  started sending when Record was tapped, which the app now waits longer for; a count that grows
+  while the reader stays at `0` means the reader is missing the stream, which is a fault.
 * App: `UnsatisfiedLinkError: cannot locate symbol "GetArrayLength"`: the native library named a JNI
   function, which the loader will not resolve for an app - libart is out of reach. `src/jnitable.rs`
   reaches those functions through the `JNIEnv*` instead, and the crate must not grow an `extern`

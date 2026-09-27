@@ -6,9 +6,15 @@
 //! says JNI keeps its functions answer for real. A number in the module that
 //! points one word off then lands on poison and fails here, rather than jumping
 //! somewhere random on a phone.
+//!
+//! The stubs are written to the prototypes in the JNI specification and not to
+//! the types the module uses, so this checks the module against JNI rather than
+//! against itself: a wrong word is caught by the poison, and a wrong signature by
+//! the stub refusing to be called the way the module calls it.
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 
 /// Enough words for everything the module reaches for, plus room to spare.
 const WORDS: usize = 260;
@@ -36,10 +42,14 @@ fn reset(version: i32) {
     AT.with(|a| a.set((-1, -1)));
 }
 
-unsafe extern "system" fn fake_get_version(_env: *mut c_void, out: *mut i32) -> i32 {
-    let got = VERSION.with(|v| v.get());
-    *out = got;
-    got
+/// The JNI specification gives GetVersion one argument and a result, and this is
+/// that and nothing else - no second parameter to write an answer into. Writing
+/// the fakes to the module's own types instead would make the tests agree with
+/// any signature it happens to use, and a wrong one is exactly what they are
+/// here to catch: a stub with the real shape leaves the module's extra argument
+/// unwritten, and the check that reads it back fails.
+unsafe extern "system" fn fake_get_version(_env: *mut c_void) -> i32 {
+    VERSION.with(|v| v.get())
 }
 
 unsafe extern "system" fn fake_array_length(_env: *mut c_void, _array: *mut c_void) -> i32 {
@@ -218,5 +228,175 @@ fn the_table_starts_with_four_reserved_words() {
     assert_eq!(
         std::mem::size_of::<*const c_void>(),
         std::mem::size_of::<usize>()
+    );
+}
+
+// ------------------------------------------------------------------ the shapes
+
+/// The four prototypes, as the JNI specification writes them. Quoted rather than
+/// reached for: no NDK is guaranteed to be on the machine running these, and a
+/// test that reads the header itself would only be as good as the header's
+/// presence. This is the part of `jni.h` that has to match, counted out of the
+/// table this file's fake stands in for.
+const SPEC: &str = "\
+    jint    GetVersion(JNIEnv *env);
+    jsize   GetArrayLength(JNIEnv *env, jarray array);
+    void    SetByteArrayRegion(JNIEnv *env, jbyteArray array, jsize start, jsize len, const jbyte *buf);
+    void    SetLongArrayRegion(JNIEnv *env, jlongArray array, jsize start, jsize len, const jlong *buf);
+";
+
+/// The module's own source, so the types it declares can be read as written.
+const SOURCE: &str = include_str!("../../src/jnitable.rs");
+
+/// The JNI types that are references to Java objects rather than numbers. They
+/// are all written as `typedef jobject j...`, so they are pointers even though
+/// the C says nothing about stars - which is the whole reason this is listed
+/// instead of guessed at.
+const REFERENCES: [&str; 9] = [
+    "jobject",
+    "jclass",
+    "jstring",
+    "jthrowable",
+    "jarray",
+    "jbyteArray",
+    "jintArray",
+    "jlongArray",
+    "jobjectArray",
+];
+
+/// Each argument as one letter - `P` for a pointer, `I` for a number - and the
+/// result as one more, `V` for nothing. Nothing else about a type matters here:
+/// what matters is which values are passed in which registers, and a pointer
+/// where a number belongs (or the other way round) is the mistake worth catching.
+fn shape(args: &str, returns: &str) -> (Vec<char>, char) {
+    let one = |a: &str| {
+        if a.contains('*') {
+            'P'
+        } else if a
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| REFERENCES.contains(&word))
+        {
+            'P'
+        } else {
+            'I'
+        }
+    };
+    let params: Vec<char> = args
+        .split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(one)
+        .collect();
+    let back = match returns.trim() {
+        "" | "()" | "void" => 'V',
+        _ => 'I',
+    };
+    (params, back)
+}
+
+/// What the specification says each function is, read out of [SPEC].
+fn spec() -> BTreeMap<String, (Vec<char>, char)> {
+    let mut out = BTreeMap::new();
+    for line in SPEC.lines() {
+        let Some((head, args)) = line.split_once('(') else {
+            continue;
+        };
+        let mut words = head.split_whitespace();
+        let returns = words.next().unwrap_or("");
+        let name = words.next().unwrap_or("").to_string();
+        let args = args.trim_end_matches(')').trim_end_matches(';');
+        out.insert(name, shape(args, returns));
+    }
+    out
+}
+
+/// What the module declares each function to be, read out of its own source.
+fn declared() -> BTreeMap<String, (Vec<char>, char)> {
+    let mut out = BTreeMap::new();
+    for line in SOURCE.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("type ") else {
+            continue;
+        };
+        let Some((name, rest)) = rest.split_once('=') else {
+            continue;
+        };
+        let Some(open) = rest.find("fn(") else {
+            continue;
+        };
+        let Some(close) = rest.rfind(')') else {
+            continue;
+        };
+        let returns = rest[close..].trim_start_matches(')').trim();
+        let returns = returns.strip_prefix("->").unwrap_or("").trim();
+        out.insert(
+            name.trim().to_string(),
+            shape(&rest[open + 3..close], returns),
+        );
+    }
+    out
+}
+
+#[test]
+fn the_four_types_are_the_ones_the_specification_gives() {
+    let spec = spec();
+    let declared = declared();
+    assert_eq!(spec.len(), 4, "the specification excerpt was not read");
+    for (name, want) in &spec {
+        let got = declared
+            .get(name)
+            .unwrap_or_else(|| panic!("the module declares no type for {name}"));
+        assert_eq!(
+            want, got,
+            "{name} is declared as {:?} and the specification says {:?}: a different \
+             number of arguments, or a pointer where a number belongs, would call \
+             something else",
+            got, want
+        );
+    }
+}
+
+/// The same four, counted out of the table itself, so a number that moves in the
+/// specification cannot be quietly satisfied by a number that moved in the
+/// module. Four reserved words, then one entry per function.
+#[test]
+fn the_four_words_are_where_the_specification_puts_them() {
+    let mut table = jni_table();
+    for (index, name) in [
+        (4, "GetVersion"),
+        (171, "GetArrayLength"),
+        (208, "SetByteArrayRegion"),
+        (212, "SetLongArrayRegion"),
+    ] {
+        // The stub for each is the one that answers like the specification's.
+        table[index] = match name {
+            "GetVersion" => fake_get_version as *const c_void,
+            "GetArrayLength" => fake_array_length as *const c_void,
+            "SetByteArrayRegion" => fake_set_bytes as *const c_void,
+            _ => fake_set_longs as *const c_void,
+        };
+    }
+    let env = env_of(&table);
+    reset(JNI_1_6);
+    LENGTH.with(|v| v.set(7));
+    unsafe {
+        assert!(table_is_sane(env), "the version comes from word 4");
+        assert_eq!(
+            array_length(env, an_array()),
+            7,
+            "the length comes from word 171"
+        );
+        set_bytes(env, an_array(), 0, &[1, 2, 3]);
+        set_longs(env, an_array(), 0, &[4, 5]);
+    }
+    assert_eq!(
+        BYTES.with(|b| b.borrow().clone()),
+        vec![1, 2, 3],
+        "bytes come from word 208"
+    );
+    assert_eq!(
+        LONGS.with(|l| l.borrow().clone()),
+        vec![4, 5],
+        "longs come from word 212"
     );
 }

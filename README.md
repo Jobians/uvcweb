@@ -24,7 +24,7 @@ Linux binary. See `.github/workflows/release.yml`.
 
     pkg install rust clang libuvc libusb
     cargo build --release          # links the libusb/libuvc you just installed; do not add --features android-static, that's for the Android build only (see android/README.md)
-    cargo test              # optional: 78 tests, none need USB hardware
+    cargo test              # optional: 80 tests, none need USB hardware
 
 Needs Rust 1.70 or newer.
 

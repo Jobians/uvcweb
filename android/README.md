@@ -106,6 +106,9 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
   has sent N picture(s) so far`, and again if the wait gives up). `0` there means the card had not
   started sending when Record was tapped, which the app now waits longer for; a count that grows
   while the reader stays at `0` means the reader is missing the stream, which is a fault.
+* App: `the JNI table on this thread answers 0x...`: the table behind `JNIEnv*` is not one, so
+  nothing is ever written into a Java array. Every picture read then comes back empty, which looks
+  like a card that sends nothing. The number in the line is what the table said.
 * App: `Attempt to get length of null array`: a native method was declared as returning a Java array
   instead of filling one it was passed. The native side does not create Java arrays, so it hands back
   null and the first `.size` on it throws. `src/contract.rs` compares every declaration in `Native.kt`

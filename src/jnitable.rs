@@ -24,7 +24,7 @@ const WORD_GET_ARRAY_LENGTH: usize = 171;
 const WORD_SET_BYTE_ARRAY_REGION: usize = 208;
 const WORD_SET_LONG_ARRAY_REGION: usize = 212;
 
-type GetVersion = unsafe extern "system" fn(*mut c_void, *mut i32) -> i32;
+type GetVersion = unsafe extern "system" fn(*mut c_void) -> i32;
 type GetArrayLength = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
 type SetByteArrayRegion = unsafe extern "system" fn(*mut c_void, *mut c_void, i32, i32, *const u8);
 type SetLongArrayRegion = unsafe extern "system" fn(*mut c_void, *mut c_void, i32, i32, *const i64);
@@ -43,6 +43,24 @@ unsafe fn word(env: *mut c_void, index: usize) -> *const c_void {
     *table.add(index)
 }
 
+/// The JNI version this table reports, which is the one thing a JNI table is
+/// asked before anything is written through it.
+///
+/// # Safety
+/// `env` must be a `JNIEnv*`.
+pub unsafe fn version(env: *mut c_void) -> i32 {
+    let f: GetVersion = std::mem::transmute(word(env, WORD_GET_VERSION));
+    f(env)
+}
+
+/// Whether a number is what a JNI table answers. Any JNI 1.x gives 0x0001xxxx.
+///
+/// Kept apart from the call so that the caller can say which number it was
+/// refused, and so the shape can be tested on its own.
+pub fn version_is_sane(version: i32) -> bool {
+    (version as u32 & 0xffff_0000) == 0x0001_0000
+}
+
 /// Whether the table `env` points at really is a JNI table.
 ///
 /// Nothing is written through the table before this has said yes: the JNI
@@ -52,11 +70,10 @@ unsafe fn word(env: *mut c_void, index: usize) -> *const c_void {
 /// # Safety
 /// `env` must be a `JNIEnv*`.
 pub unsafe fn table_is_sane(env: *mut c_void) -> bool {
-    let mut version: i32 = 0;
-    let f: GetVersion = std::mem::transmute(word(env, WORD_GET_VERSION));
-    let got = f(env, &mut version);
-    // Any JNI 1.x answers 0x0001xxxx and writes the same number back.
-    (got as u32 & 0xffff_0000) == 0x0001_0000 && version == got
+    // Only the answer is asked for. The specification gives GetVersion one
+    // argument, and a second one is read out of whatever register holds it, so
+    // there is nothing written back to compare against.
+    version_is_sane(version(env))
 }
 
 /// How many elements a Java array holds.

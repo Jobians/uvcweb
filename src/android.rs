@@ -58,18 +58,31 @@ thread_local! {
 }
 
 static TABLE_IS_SANE: AtomicBool = AtomicBool::new(false);
+/// A refused table is said once, not once per call: a reader asks thirty times a
+/// second, and thirty identical lines a second would bury everything else.
+static TABLE_REFUSED: AtomicBool = AtomicBool::new(false);
 
 /// Whether the JNI table behind an `env` is one, decided once per process.
 ///
 /// Nothing is written into a Java array before this has said yes: a pointer that
-/// is not the table would write wherever it happened to point.
+/// is not the table would write wherever it happened to point. And a refusal is
+/// said out loud, because a silent one looks exactly like a card that is sending
+/// nothing: the reader simply never gets an array back, with nothing in the log
+/// to say why.
 fn jni_table_ok(env: *mut c_void) -> bool {
     if TABLE_IS_SANE.load(Ordering::Relaxed) {
         return true;
     }
-    if unsafe { jnitable::table_is_sane(env) } {
+    let version = unsafe { jnitable::version(env) };
+    if jnitable::version_is_sane(version) {
         TABLE_IS_SANE.store(true, Ordering::Relaxed);
         return true;
+    }
+    if !TABLE_REFUSED.swap(true, Ordering::SeqCst) {
+        say!(
+            "the JNI table on this thread answers {version:#010x}, which is not a JNI 1.x \
+             table, so no Java array will be written through it"
+        );
     }
     false
 }

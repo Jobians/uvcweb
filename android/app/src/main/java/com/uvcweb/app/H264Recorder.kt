@@ -28,6 +28,10 @@ import java.io.File
  *    show H.264 will not take raw PCM in an MP4;
  *  * [MediaMuxer] writes both tracks into the file.
  *
+ * Everything it needs from the card comes through [Native], which means a fault on that side
+ * looks like a card that has stopped sending: the wait for a first picture times out with
+ * nothing queued, and the numbers in the log are what tell the two apart.
+ *
  * Timestamps come from the capture rather than from a frame counter, so if a
  * conversion takes longer than a frame and the picture has to be skipped, the
  * file plays at the rate the phone managed and the sound stays in step: a player

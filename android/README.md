@@ -100,6 +100,11 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
 * `build-native-deps.sh` compile errors: libusb / libuvc versions. `LIBUSB_REF` / `LIBUVC_REF` select the tags.
 * `build-rust.sh` linker errors mentioning `libusb_*` or `uvc_*`: the static archive was not found or is for
   another CPU type. `cargo` should print `-L .../native-deps/<abi>/lib`.
+* App: `UnsatisfiedLinkError: cannot locate symbol "GetArrayLength"`: the native library named a JNI
+  function, which the loader will not resolve for an app - libart is out of reach. `src/jnitable.rs`
+  reaches those functions through the `JNIEnv*` instead, and the crate must not grow an `extern`
+  block for JNI names. Its tests stand on a table built by hand, so an index that moves fails on a
+  desktop rather than on a phone.
 * App: "could not open the capture card": permission dialog refused, or the card was unplugged.
 * App: "the record folder could not be used - see the log": the phone's storage is full, or the app's
   external folder is gone (moved to another card). The log line names the folder that failed.
@@ -119,6 +124,7 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
         Native.kt          the JNI functions (must match ../src/android.rs)
         CaptureService.kt  foreground service: owns the USB connection and the Rust engine
         H264Recorder.kt    MP4 recording: JPEG -> YUV -> H.264, sound -> AAC, muxed by MediaMuxer
+        Util.kt            paths, log, the record folder
         MainActivity.kt    settings, permissions, Start/Stop, Record, status and log
         ViewerActivity.kt  the web viewer page in a full-screen WebView
         Settings.kt, Util.kt

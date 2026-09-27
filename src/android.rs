@@ -2,10 +2,11 @@
 
 //! JNI entry points for the Android app (see `android/`). Only compiled for Android.
 //!
-//! They take **primitive arguments only** - with one exception, the encoder
-//! feed, where the app hands us a `byte[]` to fill. That needs two functions out
-//! of the JNI table, declared by hand below so the crate still has no
-//! dependencies. Matching Kotlin:
+//! They take **primitive arguments only** - with one exception, the encoder feed,
+//! where the app hands us a `byte[]` to fill. That needs three functions out of
+//! the JNI table, which are reached through the `JNIEnv*` every native method is
+//! given (see "the JNI table" below) so the crate keeps no dependencies. Matching
+//! Kotlin:
 //!
 //! ```kotlin
 //! package com.uvcweb.app
@@ -40,34 +41,15 @@
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::feed;
+use crate::jnitable;
 use std::os::raw::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-// The JNI table lives behind the env pointer, so its entries are only reachable
-// through the runtime. Android's libart exports these two by name (which is how
-// the `jni` crate reaches them as well), so they can simply be called: it saves
-// carrying a JNIEnv through the Rust code that needs no other part of it.
-extern "system" {
-    /// Length of a Java array, in elements.
-    fn GetArrayLength(env: *mut c_void, array: *mut c_void) -> i32;
-    /// Copies `len` bytes into a Java byte array, from `start`.
-    fn SetByteArrayRegion(
-        env: *mut c_void,
-        array: *mut c_void,
-        start: i32,
-        len: i32,
-        buf: *const u8,
-    );
-    fn SetLongArrayRegion(
-        env: *mut c_void,
-        array: *mut c_void,
-        start: i32,
-        len: i32,
-        buf: *const i64,
-    );
-}
+static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
+// Mirrors `ENGINE.is_some()` without taking the lock: `start` holds the lock while the camera opens.
+static RUNNING: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     /// The app's own buffer is where a picture is really written; this is only
@@ -75,9 +57,21 @@ thread_local! {
     static SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
-// Mirrors `ENGINE.is_some()` without taking the lock: `start` holds the lock while the camera opens.
-static RUNNING: AtomicBool = AtomicBool::new(false);
+static TABLE_IS_SANE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the JNI table behind an `env` is one, decided once per process.
+///
+/// Nothing is written into a Java array before this has said yes: a pointer that
+/// is not the table would write wherever it happened to point.
+fn jni_table_ok(env: *mut c_void) -> bool {
+    if TABLE_IS_SANE.load(Ordering::Relaxed) {
+        return true;
+    }
+    if unsafe { jnitable::table_is_sane(env) } {
+        TABLE_IS_SANE.store(true, Ordering::Relaxed);
+    }
+    false
+}
 
 const ERR_ALREADY_RUNNING: i32 = -100;
 const ERR_PANIC: i32 = -101;
@@ -336,9 +330,12 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedPull(
         if into.is_null() {
             return feed::EMPTY;
         }
+        if !jni_table_ok(env) {
+            return feed::EMPTY;
+        }
         // The array is the app's, and only this thread touches it, so its length
         // is a safe bound for the copy.
-        let room = unsafe { GetArrayLength(env, into) };
+        let room = unsafe { jnitable::array_length(env, into) };
         if room <= 0 {
             return feed::EMPTY;
         }
@@ -350,9 +347,7 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedPull(
             buf.resize(room as usize, 0);
             let n = feed::pull(kind, &mut buf);
             if n > 0 {
-                unsafe {
-                    SetByteArrayRegion(env, into, 0, n as i32, buf.as_ptr());
-                }
+                unsafe { jnitable::set_bytes(env, into, 0, &buf[..n as usize]) };
             }
             n
         })
@@ -391,7 +386,7 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedStats(
     out: *mut c_void,
 ) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
-        if out.is_null() {
+        if out.is_null() || !jni_table_ok(env) {
             return 0;
         }
         let st = feed::stats();
@@ -405,10 +400,11 @@ pub extern "C" fn Java_com_uvcweb_app_Native_feedStats(
             st.queued as i64,
             st.queued_bytes as i64,
         ];
-        if unsafe { GetArrayLength(env, out) } < numbers.len() as i32 {
+        let room = unsafe { jnitable::array_length(env, out) };
+        if room < numbers.len() as i32 {
             return 0;
         }
-        unsafe { SetLongArrayRegion(env, out, 0, numbers.len() as i32, numbers.as_ptr()) };
+        unsafe { jnitable::set_longs(env, out, 0, &numbers) };
         numbers.len() as i32
     }))
     .unwrap_or(0)

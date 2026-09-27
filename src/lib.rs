@@ -15,6 +15,8 @@
 //!   recorder             one more subscriber: writes the pictures + audio into an AVI file
 //!   feed                 a short, drop-the-oldest copy of the stream for a real-time encoder
 //!                         (the Android app's H.264 recorder) to read
+//!   jnitable             the JNI function table, reached without naming a JNI symbol
+//!                         (the app's own library is not allowed to see libart's)
 //!   jpeg / rtp           RTP/JPEG + RTP L16 + RTCP building blocks for RTP based protocols
 //!   engine               start / stop / supervise one capture session
 
@@ -25,6 +27,8 @@ pub mod engine;
 /// A bounded copy of the stream for a real-time encoder to read (see the module).
 pub mod feed;
 pub mod hub;
+/// The JNI function table, for the app to fill a Java array from here (see the module).
+pub mod jnitable;
 pub mod protocols;
 pub mod recorder;
 

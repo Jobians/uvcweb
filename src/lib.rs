@@ -13,6 +13,8 @@
 //!   hub                  latest picture + audio queue; protocols subscribe here
 //!   protocols            one file per protocol (web, rtsp); protocols/mod.rs is the plug-in point
 //!   recorder             one more subscriber: writes the pictures + audio into an AVI file
+//!   feed                 a short, drop-the-oldest copy of the stream for a real-time encoder
+//!                         (the Android app's H.264 recorder) to read
 //!   jpeg / rtp           RTP/JPEG + RTP L16 + RTCP building blocks for RTP based protocols
 //!   engine               start / stop / supervise one capture session
 
@@ -20,6 +22,8 @@
 pub mod log;
 pub mod config;
 pub mod engine;
+/// A bounded copy of the stream for a real-time encoder to read (see the module).
+pub mod feed;
 pub mod hub;
 pub mod protocols;
 pub mod recorder;

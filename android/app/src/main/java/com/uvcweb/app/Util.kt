@@ -42,6 +42,11 @@ object Util {
         return File(root, RECORD_DIR_NAME)
     }
 
+    /** A file name for a recording: the same shape the Rust program uses. */
+    fun recordStamp(): String {
+        return SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    }
+
     private val logLock = Any()
     private val stampFormat get() = SimpleDateFormat("HH:mm:ss", Locale.US)
 

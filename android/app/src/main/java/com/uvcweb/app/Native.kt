@@ -73,6 +73,53 @@ object Native {
     @JvmStatic
     external fun recordMegabytes(): Int
 
+    // ------------------------------------------------------------ the encoder feed
+    //
+    // The H.264 recorder pulls the card's pictures and sound out of these. It is
+    // a short queue, not a record of everything: a picture that arrives too late
+    // is worth nothing to an encoder, so the freshest one wins. Pulling, rather
+    // than being called back into, keeps the capture thread free of the encoder.
+
+    /** Starts copying the stream for one reader. 0 on success, otherwise [describeError]. */
+    @JvmStatic
+    external fun feedArm(): Int
+
+    /** Stops copying. Pull the tail first: whatever is still queued goes with this. */
+    @JvmStatic
+    external fun feedDisarm()
+
+    /** True once the reader is on the live edge; sound from before that is not recorded. */
+    @JvmStatic
+    external fun feedAttached(): Boolean
+
+    /** True once the capture session ended, so a reader can finish its file. */
+    @JvmStatic
+    external fun feedEnded(): Boolean
+
+    /** Timestamp in microseconds of the next item, or -1 when there is nothing. */
+    @JvmStatic
+    external fun feedPeekPts(kind: Int): Long
+
+    /**
+     * Fills [into] with the next item and returns how many bytes it wrote, -1 when
+     * the queue was empty, or -2 when [into] was too small - in which case the item
+     * stays and the call can be repeated with a bigger buffer.
+     */
+    @JvmStatic
+    external fun feedPull(kind: Int, into: ByteArray): Int
+
+    /** The sound format as rate shl 32 or channels, or -1 when there is none yet. */
+    @JvmStatic
+    external fun feedAudioFormat(): Long
+
+    /** The picture rate the session is running at, as a hint for an encoder. */
+    @JvmStatic
+    external fun feedVideoFps(): Double
+
+    /** [frames, dropped, chunks, soundBytes, seconds, queued, queuedBytes]. */
+    @JvmStatic
+    external fun feedStats(): LongArray
+
     fun describeError(code: Int): String = when (code) {
         1 -> "libuvc could not start"
         2 -> "could not open the capture card (permission missing, or unplugged?)"

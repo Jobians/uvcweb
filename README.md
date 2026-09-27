@@ -24,7 +24,7 @@ Linux binary. See `.github/workflows/release.yml`.
 
     pkg install rust clang libuvc libusb
     cargo build --release          # links the libusb/libuvc you just installed; do not add --features android-static, that's for the Android build only (see android/README.md)
-    cargo test              # optional: 56 tests, none need USB hardware
+    cargo test              # optional: 67 tests, none need USB hardware
 
 Needs Rust 1.70 or newer.
 
@@ -67,9 +67,18 @@ If the card's JPEGs can't be sent this way you get a clear log line instead of g
 
 ## Recording
 
-The **Record** button on the viewer page (or `c` on the keyboard) records what the card
-streams into `.avi` files: the card's own JPEGs as-is (`MJPG`) and its audio as raw PCM,
-so nothing is re-encoded and a recording costs almost no CPU.
+There are two recorders, and they write different things on purpose.
+
+The **Android app** records to **`.mp4`, H.264 + AAC**, using the phone's own hardware
+encoder. A file that way is roughly 5-10 times smaller than the raw pictures and plays
+anywhere. The phone has to decode each JPEG and convert it to YUV first, so on a slow
+phone some pictures are skipped; the rest keep their own timestamps, so the sound stays
+in step. See `android/README.md` for the details.
+
+The **viewer page** (the **Record** button, or `c` on the keyboard) and the command line
+record to `.avi`: the card's own JPEGs as-is (`MJPG`) and its audio as raw PCM, so nothing
+is re-encoded and a recording costs almost no CPU. Those are the original pictures, which
+matters when the card's own compression is what you want to look at.
 
 * Files go to `record/` in the working directory, or wherever `-R DIR` / the environment
   variable `UVCWEB_RECORD_DIR` points. The name carries the start time, e.g.
@@ -120,6 +129,8 @@ touching the picture or sound quality, remux instead of re-encoding:
     src/descriptors.rs   USB descriptor parsing (pure, unit tested)
     src/hub.rs           latest picture + audio queue; publish/subscribe
     src/recorder.rs      recording: JPEG+PCM straight into .avi (subscribes to the hub)
+    src/feed.rs          the same stream as a short queue, for an encoder to pull from
+                       (the Android app's H.264 recorder; live edge, old pictures dropped)
     src/protocols/       web.rs, rtsp.rs, mod.rs (plug-in point)
     src/jpeg.rs, rtp.rs  RTP/JPEG, L16, RTCP building blocks
     tests/unit/          unit tests, one file per module (e.g. hub.rs -> tests/unit/hub_tests.rs),

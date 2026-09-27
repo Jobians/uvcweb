@@ -48,6 +48,9 @@ class MainActivity : Activity() {
   private lateinit var startButton: Button
   private lateinit var viewerButton: Button
   private lateinit var recordButton: Button
+
+  /** True while a recording is being started or stopped, so a second tap waits. */
+  @Volatile private var recordingBusy = false
   private lateinit var statusText: TextView
   private lateinit var urlText: TextView
   private lateinit var logText: TextView
@@ -267,37 +270,89 @@ class MainActivity : Activity() {
 
   // ------------------------------------------------------------------ recording
 
-  /**
-   * Starts or stops a recording. Both calls only touch a few locks and spawn or join a
-   * handful of threads, so they are quick enough for the main thread; the recording itself
-   * runs in the Rust library, not here.
-   */
   private fun onRecordClicked() {
+    if (recordingBusy) return
     if (CaptureService.state != CaptureService.State.RUNNING) {
       toast("Start the camera first - there is nothing to record yet")
       return
     }
+    if (H264Recorder.isActive || Native.isRecording()) stopRecording() else startRecording()
+  }
+
+  /**
+   * Starts recording, as an MP4 with the phone's own encoder. Setting the
+   * encoders up takes a moment, so it happens off the main thread and the button
+   * waits for the answer.
+   */
+  private fun startRecording() {
     val dir = Util.recordDir(this)
-    if (Native.isRecording()) {
-      val frames = Native.stopRecord()
-      if (frames >= 0) {
-        toast("Saved $frames frames to ${dir.absolutePath}")
-        Util.appendLog(this, "recording stopped: $frames frames in ${dir.absolutePath}")
+    recordingBusy = true
+    recordButton.isEnabled = false
+    Thread {
+      val problem = H264Recorder.start(this, dir)
+      if (problem == null) {
+        Util.appendLog(this, "recording as MP4 (H.264) in ${dir.absolutePath}")
+        show("Recording to ${dir.absolutePath}")
       } else {
-        toast(Native.describeError(frames))
+        // A phone without a usable encoder still gets a recording, just a bigger
+        // one: the card's own pictures, written untouched into an AVI.
+        Util.appendLog(this, "no H.264 encoder here ($problem); writing AVI instead")
+        val code = Native.startRecord()
+        show(
+            if (code == 0) "Recording ${dir.absolutePath} as AVI"
+            else Native.describeError(code))
       }
-    } else {
-      val code = Native.startRecord()
-      if (code == 0) {
-        toast("Recording to ${dir.absolutePath}")
+      recordingBusy = false
+      refreshStatus()
+    }.start()
+  }
+
+  /** Stops whatever is running, whichever way it was started. */
+  private fun stopRecording() {
+    val wasEncoded = H264Recorder.isActive
+    recordingBusy = true
+    recordButton.isEnabled = false
+    Thread {
+      if (wasEncoded) {
+        val done = H264Recorder.stop()
+        val message =
+            when {
+              done.error != null -> done.error
+              done.file != null ->
+                  "Saved ${done.file.name}: ${done.seconds}s, ${done.frames} pictures"
+              else -> "Nothing was captured, so no file was written"
+            }
+        Util.appendLog(this, message)
+        if (done.skipped > 0) {
+          Util.appendLog(this, "this phone was too slow for ${done.skipped} picture(s); the rest played in step")
+        }
+        show(message)
       } else {
-        toast(Native.describeError(code))
+        val dir = Util.recordDir(this)
+        val frames = Native.stopRecord()
+        val message =
+            if (frames >= 0) "Saved $frames pictures to ${dir.absolutePath}"
+            else Native.describeError(frames)
+        Util.appendLog(this, message)
+        show(message)
       }
-    }
-    refreshStatus()
+      recordingBusy = false
+      refreshStatus()
+    }.start()
+  }
+
+  /** Runs `what` on the main thread, because everything here started on another one. */
+  private fun show(message: String) {
+    runOnUiThread { toast(message) }
   }
 
   private fun recordSuffix(): String {
+    val encoded = H264Recorder.progress()
+    if (encoded != null) {
+      val mins = encoded.seconds / 60
+      return ": recording %d:%02d, %d pictures, %d MB (H.264)"
+          .format(mins, encoded.seconds % 60, encoded.frames, encoded.megabytes.toInt())
+    }
     if (!Native.isRecording()) return ""
     val total = Native.recordSeconds()
     return ": recording %d:%02d, %d frames, %d MB"
@@ -320,8 +375,8 @@ class MainActivity : Activity() {
       CaptureService.State.WAITING -> CaptureService.message
     }
 
-    val recording = running && Native.isRecording()
-    recordButton.isEnabled = running
+    val recording = running && (H264Recorder.isActive || Native.isRecording())
+    recordButton.isEnabled = running && !recordingBusy
     recordButton.text = if (recording) "Stop recording" else "Record"
     val settings = readSettings()
     viewerButton.isEnabled = running && settings.web

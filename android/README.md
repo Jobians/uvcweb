@@ -54,7 +54,7 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 2. Choose Web viewer and/or RTSP, ports, and the video mode (0 x 0 = the card's default).
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
-4. **Record** records the picture and sound into `.avi` files (see below). **Open viewer** shows the web
+4. **Record** records the picture and sound into an `.mp4` file (see below). **Open viewer** shows the web
    page full screen inside the app (rotate, landscape, record and hide buttons work there too). Other apps can use the URLs shown under the status line, e.g. VLC on `rtsp://127.0.0.1:8554/live`.
 5. "Allow other devices on the network" makes the servers reachable from your LAN (no password),
    and also advertises them over mDNS/Bonjour under the name shown in that same field (default
@@ -66,19 +66,32 @@ The log at the bottom is the same log as the Termux program prints.
 
 ### Recording
 
-**Record** writes what the card streams to `.avi` files: the card's own JPEGs (`MJPG`) and
-its audio as raw PCM, so nothing is re-encoded.
+**Record** writes an **`.mp4`**: H.264 video and AAC sound, made with the phone's own
+hardware encoder. A file that way is roughly 5-10 times smaller than the card's own JPEGs
+and plays in any browser, VLC or phone gallery, and it can be shared as it is.
 
-* The button turns into **Stop recording** while one runs, and the status line shows how
-  long it has been going, how many pictures and how many MB. Pressing it again writes the
-  index and closes the file, which is what makes the file playable.
+* The card sends JPEG, not the YUV an encoder wants, so the phone decodes each picture
+  and converts it. That is the one part that costs real time. A picture that is too late to
+  be encoded in time is skipped, and the log says how many were; the ones that got in keep
+  the timestamps the card gave them, so the file plays at the rate the phone managed and the
+  sound stays in step. Expect a dropped picture now and then on a slow phone, none at all on
+  a fast one.
+* Video is capped at 960 pixels wide. Anything larger is scaled down first, which keeps a
+  4K stream from costing a whole core per picture - the encoder would scale it down anyway.
+* If the phone has no encoder that will start, the app says so and records an `.avi` of the
+  card's own pictures instead (the same recorder the viewer page and the Termux program
+  use), so you always get a file.
 * Files land in the app's own storage: `Android/data/com.uvcweb.app/files/record/` (or the
   internal files folder if the device has no external storage). A file manager can open
-  that folder; the app has no screen for playing recordings back.
-* A long recording is split every 5 minutes or 1.5 GB, so one dropped recording is not one
-  broken file. `ffmpeg -i FILE.avi -c copy out.mp4` turns a recording into a smaller MP4
-  without re-encoding it.
-* The viewer page's Record button does the same thing over HTTP, so both can be used.
+  that folder; the app has no screen for playing recordings back. A file is written under a
+  `.part` name and only renamed to `.mp4` once it is complete, so a recording cut short by
+  a crash or a pulled battery is never mistaken for one that plays.
+* The button turns into **Stop recording** while one runs, and the status line shows how
+  long it has been going, how many pictures and how many MB. Stopping the camera finishes
+  the file by itself; the log then says what was written.
+* The viewer page's **Record** button (and the Termux program) record the card's own
+  pictures to `.avi` instead - bigger, but untouched, which is what you want when the card's
+  own compression is the thing under test.
 
 ## If something does not work
 
@@ -90,6 +103,10 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
 * App: "could not open the capture card": permission dialog refused, or the card was unplugged.
 * App: "the record folder could not be used - see the log": the phone's storage is full, or the app's
   external folder is gone (moved to another card). The log line names the folder that failed.
+* App: "no H.264 encoder here ... writing AVI instead": the phone has no encoder that will take
+  pictures in the formats Android offers. The AVI is bigger, but the recording works.
+* Log says `the encoders did not finish in time`: the phone was too busy to flush; the `.part`
+  file is left where it is and the recording is not usable.
 * Log says `USB audio: cannot claim interface ... BUSY`: Android's own USB audio driver holds the audio
   interface; the video will still work.
 * Adjust the Gradle / Android Gradle Plugin versions in `build.gradle.kts` if your Android Studio asks you to.
@@ -101,6 +118,7 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
     app/src/main/java/com/uvcweb/app/
         Native.kt          the JNI functions (must match ../src/android.rs)
         CaptureService.kt  foreground service: owns the USB connection and the Rust engine
+        H264Recorder.kt    MP4 recording: JPEG -> YUV -> H.264, sound -> AAC, muxed by MediaMuxer
         MainActivity.kt    settings, permissions, Start/Stop, Record, status and log
         ViewerActivity.kt  the web viewer page in a full-screen WebView
         Settings.kt, Util.kt

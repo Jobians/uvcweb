@@ -183,12 +183,13 @@ class CaptureService : Service() {
             Util.appendLog(this, "could not set UVCWEB_LOG_FILE (${e}); the Rust side will only log to Logcat")
         }
 
-        // Recordings go into the app's own storage folder, named for the Rust recorder to find.
+        // The AVI fallback writes into the app's own storage folder, named for the Rust
+        // recorder to find. A recording made as MP4 is put in Util.MOVIE_PATH instead.
         val recordDir = Util.recordDir(this)
         try {
             recordDir.mkdirs()
             Os.setenv("UVCWEB_RECORD_DIR", recordDir.absolutePath, true)
-            Util.appendLog(this, "recordings will go to ${recordDir.absolutePath}")
+            Util.appendLog(this, "AVI recordings will go to ${recordDir.absolutePath}")
         } catch (e: Exception) {
             // Recording is optional: without the variable the recorder falls back to its own
             // default folder, which is likely to fail, but serving video must not be affected.

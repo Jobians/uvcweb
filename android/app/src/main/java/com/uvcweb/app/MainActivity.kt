@@ -224,6 +224,10 @@ class MainActivity : Activity() {
     if (Build.VERSION.SDK_INT >= 33) {
       wanted.add(Manifest.permission.POST_NOTIFICATIONS)
     }
+    if (Build.VERSION.SDK_INT <= 28) {
+      // A finished recording goes into the public Movies folder on these versions.
+      wanted.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    }
     return wanted.filter {
       checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
     }
@@ -291,8 +295,10 @@ class MainActivity : Activity() {
     Thread {
       val problem = H264Recorder.start(this, dir)
       if (problem == null) {
-        Util.appendLog(this, "recording as MP4 (H.264) in ${dir.absolutePath}")
-        show("Recording to ${dir.absolutePath}")
+        // It is written in the app's own folder while it is being made, and put
+        // where other apps can see it when it is done.
+        Util.appendLog(this, "recording as MP4 (H.264) into ${Util.MOVIE_PATH}")
+        show("Recording into ${Util.MOVIE_PATH}")
       } else {
         // A phone without a usable encoder still gets a recording, just a bigger
         // one: the card's own pictures, written untouched into an AVI.
@@ -319,10 +325,10 @@ class MainActivity : Activity() {
             when {
               done.error != null -> done.error
               done.file != null ->
-                  "Saved ${done.file.name}: ${done.seconds}s, ${done.frames} pictures"
+                  "Saved ${done.file.name} to ${Util.MOVIE_PATH}: " +
+                      "${done.seconds}s, ${done.frames} pictures"
               else -> "Nothing was captured, so no file was written"
             }
-        Util.appendLog(this, message)
         if (done.skipped > 0) {
           Util.appendLog(this, "this phone was too slow for ${done.skipped} picture(s); the rest played in step")
         }
@@ -333,7 +339,6 @@ class MainActivity : Activity() {
         val message =
             if (frames >= 0) "Saved $frames pictures to ${dir.absolutePath}"
             else Native.describeError(frames)
-        Util.appendLog(this, message)
         show(message)
       }
       recordingBusy = false

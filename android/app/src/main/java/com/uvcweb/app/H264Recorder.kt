@@ -135,6 +135,10 @@ object H264Recorder {
    * Starts recording. This blocks until the encoders are up, which is also when
    * a failure shows up: null means it is running, anything else is a message to
    * show the user.
+   *
+   * [dir] is where the recording is written while it is being made, which is the
+   * app's own folder so that nothing else can see a recording in progress. A
+   * finished one is put in [Util.MOVIE_PATH] instead.
    */
   fun start(context: Context, dir: File): String? {
     if (session != null) return "a recording is already running"
@@ -178,9 +182,10 @@ object H264Recorder {
 
   private class Session(private val context: Context, private val dir: File) {
     /**
-     * Written under a name that says "not finished" until the muxer is happy, so
-     * a recording cut short by a crash or a battery pull is never mistaken for
-     * something that plays.
+     * The recording, written in the app's own folder under a name that says "not
+     * finished", so that nothing else can see it and a recording cut short by a
+     * crash or a battery pull is never mistaken for something that plays. It is
+     * put in [Util.MOVIE_PATH] once the muxer is happy with it.
      */
     val part = File(dir, "${Util.recordStamp()}.mp4.part")
     private lateinit var muxer: MediaMuxer
@@ -763,8 +768,14 @@ object H264Recorder {
     /**
      * Writes the file out, or throws it away when there is nothing in it, and
      * hands the result to whoever asks next.
+     *
+     * The recording is written to the app's own folder all along, and only a file
+     * the muxer is happy with is put where other apps can see it, so a recording
+     * cut short by a crash or a battery pull is never mistaken for something
+     * that plays.
      */
     private fun finish() {
+      var keep = false
       try {
         if (frames == 0) {
           log("nothing was captured, so no file was written")
@@ -773,18 +784,20 @@ object H264Recorder {
             throw IllegalStateException("this phone's encoders never produced a file")
           }
           muxer.stop()
-          val final = File(part.parentFile, part.name.removeSuffix(".part"))
-          if (final.exists() && !final.delete()) {
-            throw IllegalStateException("${final.absolutePath} is in the way")
-          }
-          if (!part.renameTo(final)) {
-            throw IllegalStateException("could not move the file into place")
-          }
-          finished = final
-          log("wrote ${final.name}: $frames pictures, ${final.length()} bytes")
+          val published = Util.publishMovie(context, part)
+          finished = published
+          log("wrote ${published.name}: $frames pictures, ${published.length()} bytes")
         }
       } catch (e: Exception) {
-        fail("the file could not be finished", e)
+        if (frames > 0 && part.exists()) {
+          // The recording itself is sound; only putting it where other apps can
+          // see it did not work. It is kept where it is rather than thrown away,
+          // and the path is said out loud so it can still be found.
+          keep = true
+          fail("it could not be put in ${Util.MOVIE_PATH}, so it is at ${part.absolutePath}", e)
+        } else {
+          fail("the file could not be finished", e)
+        }
       } finally {
         // What the card sent against what went into the file: the difference is
         // either this phone being slow or the card's own mode being the limit.
@@ -794,7 +807,7 @@ object H264Recorder {
         val known = Native.feedStats(seen)
         // Nothing will be read from the card again, so it can stop copying.
         runCatching { Native.feedDisarm() }
-        if (finished == null) part.delete() // nothing worth keeping
+        if (!keep) part.delete() // nothing worth keeping, or already published
         if (known >= 4) {
           log("the card sent ${seen[0]} pictures and ${seen[2]} sound chunks, $frames were encoded")
           // The two numbers that say whether the file holds the whole session:

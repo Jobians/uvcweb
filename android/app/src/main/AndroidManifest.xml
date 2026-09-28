@@ -17,6 +17,12 @@
          permissions, even though the app never uses the phone's own camera or microphone. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Only needed before Android had a collection of its own: from Android 10 a finished
+         recording is put in MediaStore, which needs no permission at all, and until then the
+         public Movies folder does. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="false"

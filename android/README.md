@@ -54,6 +54,9 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 2. Choose Web viewer and/or RTSP, ports, and the video mode (0 x 0 = the card's default).
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
+   On Android 9 and older it also asks for storage permission, which is only needed to put a finished
+   recording in the public Movies folder; from Android 10 onwards MediaStore is used and no permission
+   is needed for that.
 4. **Record** records the picture and sound into an `.mp4` file (see below). **Open viewer** shows the web
    page full screen inside the app (rotate, landscape, record and hide buttons work there too). Other apps can use the URLs shown under the status line, e.g. VLC on `rtsp://127.0.0.1:8554/live`.
 5. "Allow other devices on the network" makes the servers reachable from your LAN (no password),
@@ -81,11 +84,16 @@ and plays in any browser, VLC or phone gallery, and it can be shared as it is.
 * If the phone has no encoder that will start, the app says so and records an `.avi` of the
   card's own pictures instead (the same recorder the viewer page and the Termux program
   use), so you always get a file.
-* Files land in the app's own storage: `Android/data/com.uvcweb.app/files/record/` (or the
-  internal files folder if the device has no external storage). A file manager can open
-  that folder; the app has no screen for playing recordings back. A file is written under a
-  `.part` name and only renamed to `.mp4` once it is complete, so a recording cut short by
-  a crash or a pulled battery is never mistaken for one that plays.
+* A finished file goes to the shared **Movies** collection, in a folder of this app's own:
+  `Movies/com.uvcweb.app/`. It is published through MediaStore, so the phone gallery and
+  Photos see it and other apps can read it through the normal MediaStore APIs.
+* While it is being made the file stays in the app's own storage
+  (`Android/data/com.uvcweb.app/files/record/`, or the internal files folder if the device
+  has no external storage) under a `.part` name, which nothing else can see. It is only
+  published once every byte of it is in place, so a recording cut short by a crash or a
+  pulled battery is never mistaken for one that plays, and a file is never left half
+  published. If publishing it fails, the file is kept where it was written and the log says
+  the path.
 * The button turns into **Stop recording** while one runs, and the status line shows how
   long it has been going, how many pictures and how many MB. Stopping the camera finishes
   the file by itself; the log then says what was written.
@@ -120,9 +128,14 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
   desktop rather than on a phone.
 * App: "could not open the capture card": permission dialog refused, or the card was unplugged.
 * App: "the record folder could not be used - see the log": the phone's storage is full, or the app's
-  external folder is gone (moved to another card). The log line names the folder that failed.
+  external folder is gone (moved to another card). The log line names the folder that failed. This is
+  where a recording is written while it is being made; a finished one is published to
+  `Movies/com.uvcweb.app/`.
 * App: "no H.264 encoder here ... writing AVI instead": the phone has no encoder that will take
   pictures in the formats Android offers. The AVI is bigger, but the recording works.
+* App: "it could not be put in Movies/com.uvcweb.app, so it is at /storage/...": the finished
+  recording could not be published - usually storage that is full. The file itself is sound and
+  has been left in the app's own folder at the path the message gives.
 * Log says `the encoders did not finish in time`: the phone was too busy to flush; the `.part`
   file is left where it is and the recording is not usable.
 * Log says `USB audio: cannot claim interface ... BUSY`: Android's own USB audio driver holds the audio
@@ -137,7 +150,7 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
         Native.kt          the JNI functions (must match ../src/android.rs)
         CaptureService.kt  foreground service: owns the USB connection and the Rust engine
         H264Recorder.kt    MP4 recording: JPEG -> YUV -> H.264, sound -> AAC, muxed by MediaMuxer
-        Util.kt            paths, log, the record folder
+        Util.kt            paths, log, the record folder, publishing a finished file to Movies
         MainActivity.kt    settings, permissions, Start/Stop, Record, status and log
         ViewerActivity.kt  the web viewer page in a full-screen WebView
         Settings.kt, Util.kt

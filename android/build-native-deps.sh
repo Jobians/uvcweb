@@ -153,12 +153,22 @@ generate_libusb_version_headers() {
   printf '#define LIBUSB_DESCRIBE "%s"\n' "$LIBUSB_REF" > "$dir/version_describe.h"
 }
 
-# Vendored android/config.h ships USE_SYSTEM_LOGGING_FACILITY=1; force it to 0.
+# Vendored android/config.h enables USE_SYSTEM_LOGGING_FACILITY; undefine it
+# so libusb does not use the Android system logging facility.
 patch_libusb_config() {
   local cfg="$1/android/config.h"
   [ -f "$cfg" ] || die "missing $cfg"
-  sed -i.bak -E 's/^(#define USE_SYSTEM_LOGGING_FACILITY) 1$/\1 0/' "$cfg"
+
+  sed -i.bak -E \
+    's/^[[:space:]]*#define[[:space:]]+USE_SYSTEM_LOGGING_FACILITY([[:space:]]+.*)?$/\/\* #undef USE_SYSTEM_LOGGING_FACILITY \*\//' \
+    "$cfg"
+
   rm -f "$cfg.bak"
+
+  grep -Eq '^[[:space:]]*/\* #undef USE_SYSTEM_LOGGING_FACILITY \*/[[:space:]]*$' "$cfg" \
+    || die "failed to disable USE_SYSTEM_LOGGING_FACILITY in $cfg"
+
+  note "libusb: USE_SYSTEM_LOGGING_FACILITY disabled"
 }
 
 # ---------------------------------------------------------------- per-ABI build

@@ -52,7 +52,7 @@
 #define PRINTF_FORMAT(a, b) __attribute__ ((__format__ (__printf__, a, b)))
 
 /* Define to 1 to output logging messages to the systemwide log. */
-#define USE_SYSTEM_LOGGING_FACILITY 1
+/* #undef USE_SYSTEM_LOGGING_FACILITY */
 
 /* Enable GNU extensions. */
 #define _GNU_SOURCE 1

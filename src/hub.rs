@@ -248,7 +248,12 @@ impl Hub {
         if fb == 0 || data.is_empty() {
             return;
         }
-        let cap = fmt.rate as usize * fb * 2; // keep about 2 s
+        // Keep about four seconds. Sound is the one thing a reader cannot catch
+        // up on: it arrives at the card's rate whatever the recorder is doing, so
+        // a reader that pauses loses what was at the front of this and the file
+        // gets a hole in it. The queue only ever grows to here, and four seconds
+        // is a reader pausing for a while rather than a leak.
+        let cap = fmt.rate as usize * fb * 4;
         {
             let mut g = lock(&self.audio);
             let seq = g.next_seq;

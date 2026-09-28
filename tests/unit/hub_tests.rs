@@ -92,11 +92,18 @@ fn audio_ring_drops_oldest() {
     h.set_audio_format(AudioFormat {
         rate: 100,
         channels: 1,
-    }); // cap = 400 bytes
+    });
+    // The queue holds four seconds of the card's sound, which at 100 Hz in one
+    // channel is 800 bytes, or eight of these hundred byte chunks. What does not
+    // fit goes off the front, because what is at the back is what is nearest to
+    // the sound being made now.
+    let cap = 100 * 2 * 4;
     for i in 0..20u8 {
         h.push_audio(&[i; 100]);
     }
+    let kept = (cap / 100) as u64;
     let mut next = 0u64; // a subscriber that is far behind
     let c = h.next_chunk(&mut next, Duration::from_millis(10)).unwrap();
-    assert!(c.seq >= 16);
+    assert_eq!(c.seq, 20 - kept);
+    assert_eq!(c.data[0], (20 - kept) as u8);
 }

@@ -270,11 +270,9 @@ const REFERENCES: [&str; 9] = [
 /// where a number belongs (or the other way round) is the mistake worth catching.
 fn shape(args: &str, returns: &str) -> (Vec<char>, char) {
     let one = |a: &str| {
-        if a.contains('*') {
-            'P'
-        } else if a
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .any(|word| REFERENCES.contains(&word))
+        if a.contains('*')
+            || a.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|word| REFERENCES.contains(&word))
         {
             'P'
         } else {

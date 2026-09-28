@@ -773,8 +773,8 @@ impl Avi {
             .and_then(|_| self.raw(&(data.len() as u32).to_le_bytes()))
             .and_then(|_| self.raw(data))
             .and_then(|_| if pad == 1 { self.raw(&[0]) } else { Ok(()) });
-        if ok.is_err() {
-            say!("recording: write failed: {}", ok.unwrap_err());
+        if let Err(e) = ok {
+            say!("recording: write failed: {}", e);
             return;
         }
         self.idx.extend_from_slice(id);

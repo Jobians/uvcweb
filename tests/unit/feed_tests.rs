@@ -121,7 +121,7 @@ fn pictures_come_out_in_order_with_rising_timestamps() {
     let _guard = one_reader();
     let hub = a_hub();
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     for i in 0..3u8 {
         hub.submit_frame(&jpegish(2000, 20 + i), 320, 240);
         std::thread::sleep(Duration::from_millis(60));
@@ -150,7 +150,7 @@ fn a_reader_that_falls_behind_gets_the_newest_picture() {
     let _guard = one_reader();
     let hub = a_hub();
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     // Three pictures, none of them read until the last one is on its way. The
     // hub only keeps the newest, so a late reader must not be handed a backlog:
     // for an encoder a stale picture is worth nothing.
@@ -177,7 +177,7 @@ fn a_full_queue_makes_room_for_the_newest() {
     let _guard = one_reader();
     let hub = a_hub();
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     // Big pictures, so the budget is reached in a handful of frames, and slow
     // enough that the copier sees each one.
     for i in 0..7u8 {
@@ -211,7 +211,7 @@ fn sound_carries_its_own_timing() {
     let _guard = one_reader();
     let hub = a_hub();
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     // 16 kHz stereo 16 bit is 4 bytes a sample frame, so 3200 bytes is 50 ms.
     for i in 0..5u16 {
         hub.push_audio(&vec![(i % 7) as u8; 3200]);
@@ -244,7 +244,7 @@ fn sound_from_before_the_reader_attached_is_not_recorded() {
     // from before this moment are not part of it.
     hub.push_audio(&vec![1u8; 3200]);
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     let mut buf = big_enough();
     assert!(
         drain(feed::AUDIO, &mut buf).is_empty(),
@@ -304,7 +304,7 @@ fn the_stream_ends_when_the_capture_session_does() {
     // The session goes away (the card was unplugged). A reader has to be able to
     // tell that no more pictures are coming, so it can finish and seal its file.
     hub.request_stop();
-    wait_for("the feed to end", || feed::has_ended());
+    wait_for("the feed to end", feed::has_ended);
     feed::disarm();
 }
 
@@ -313,7 +313,7 @@ fn a_reader_never_holds_up_the_stream() {
     let _guard = one_reader();
     let hub = a_hub();
     feed::arm_with(&hub).expect("arm");
-    wait_for("the reader to attach", || feed::is_attached());
+    wait_for("the reader to attach", feed::is_attached);
     // Nothing is ever read, so the copier is always pushing into a queue nobody
     // looks at. The hub must take pictures just as fast as before.
     let started = Instant::now();

@@ -53,7 +53,7 @@ jobs:
         run: mv dist/uvcweb-linux-x86_64/uvcweb dist/uvcweb-linux-x86_64-bin
 
       - name: Create the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: uvcweb ${{ github.ref_name }}
           generate_release_notes: true

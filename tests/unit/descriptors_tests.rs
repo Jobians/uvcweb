@@ -10,8 +10,8 @@ fn frame_desc(idx: u8, w: u16, h: u16, interval: u32) -> Vec<u8> {
     d.extend_from_slice(&h.to_le_bytes());
     d.extend_from_slice(&[0u8; 12]); // min/max bitrate, max frame buffer
     d.extend_from_slice(&interval.to_le_bytes());
-    d.push(1); // one discrete interval
-    d.extend_from_slice(&interval.to_le_bytes());
+    d.push(1); // bFrameIntervalType: one discrete rate
+    d.extend_from_slice(&interval.to_le_bytes()); // that rate, starting at byte 26
     assert_eq!(d.len(), 30);
     d
 }
@@ -180,7 +180,7 @@ fn mjpeg_format(default_idx: u8, frames: Vec<Vec<u8>>) -> Vec<RawAlt> {
 
 /// A frame descriptor for one size that lists `intervals` as discrete rates.
 fn discrete_frame(idx: u8, w: u16, h: u16, default_interval: u32, intervals: &[u32]) -> Vec<u8> {
-    let mut d = vec![0u8; 27 + 4 * intervals.len()];
+    let mut d = vec![0u8; 26 + 4 * intervals.len()];
     d[0] = d.len() as u8;
     d[1] = 0x24;
     d[2] = 0x07;
@@ -188,19 +188,18 @@ fn discrete_frame(idx: u8, w: u16, h: u16, default_interval: u32, intervals: &[u
     d[5..7].copy_from_slice(&w.to_le_bytes());
     d[7..9].copy_from_slice(&h.to_le_bytes());
     d[21..25].copy_from_slice(&default_interval.to_le_bytes());
-    d[25] = 2; // discrete intervals
-    d[26] = intervals.len() as u8;
+    d[25] = intervals.len() as u8; // bFrameIntervalType: how many discrete rates follow
     for (i, interval) in intervals.iter().enumerate() {
-        let at = 27 + 4 * i;
+        let at = 26 + 4 * i;
         d[at..at + 4].copy_from_slice(&interval.to_le_bytes());
     }
     d
 }
 
 /// A frame descriptor for one size that can be shot anywhere in a range of rates.
-fn range_frame(idx: u8, w: u16, h: u16, lo: u32, hi: u32) -> Vec<u8> {
-    let mut d = vec![0u8; 35];
-    d[0] = 35;
+fn range_frame(idx: u8, w: u16, h: u16, lo: u32, hi: u32, step: u32) -> Vec<u8> {
+    let mut d = vec![0u8; 38];
+    d[0] = 38;
     d[1] = 0x24;
     d[2] = 0x07;
     d[3] = idx;
@@ -208,9 +207,10 @@ fn range_frame(idx: u8, w: u16, h: u16, lo: u32, hi: u32) -> Vec<u8> {
     d[7..9].copy_from_slice(&h.to_le_bytes());
     let mid = (lo + hi) / 2;
     d[21..25].copy_from_slice(&mid.to_le_bytes());
-    d[25] = 1; // a range
-    d[27..31].copy_from_slice(&lo.to_le_bytes());
-    d[31..35].copy_from_slice(&hi.to_le_bytes());
+    d[25] = 0; // bFrameIntervalType: a continuous range
+    d[26..30].copy_from_slice(&lo.to_le_bytes());
+    d[30..34].copy_from_slice(&hi.to_le_bytes());
+    d[34..38].copy_from_slice(&step.to_le_bytes());
     d
 }
 
@@ -271,12 +271,18 @@ fn a_rate_the_card_ads_is_the_rate_the_card_is_asked_for() {
 }
 
 #[test]
-fn a_rate_range_offers_its_default_and_its_two_ends() {
-    let alts = mjpeg_format(1, vec![range_frame(1, 1280, 720, 100000, 500000)]);
-    // 100000 = 100 fps, 500000 = 20 fps, and the midpoint 300000 = 33 fps.
+fn a_rate_range_offers_every_rate_its_step_allows() {
+    let alts = mjpeg_format(1, vec![range_frame(1, 1280, 720, 100000, 500000, 100000)]);
+    // 100000 = 100 fps, 500000 = 20 fps, a step of 100000 in 100 ns units is 10 fps.
     assert_eq!(
         triples(&mjpeg_mode_list(&alts)),
-        vec![(1280, 720, 100), (1280, 720, 33), (1280, 720, 20)]
+        vec![
+            (1280, 720, 100),
+            (1280, 720, 50),
+            (1280, 720, 33),
+            (1280, 720, 25),
+            (1280, 720, 20),
+        ]
     );
 }
 
@@ -310,16 +316,36 @@ fn no_mjpeg_format_means_no_modes() {
 }
 
 #[test]
-fn a_truncated_interval_list_does_not_panic() {
-    // Says three discrete intervals and then stops: the two that are there are real,
-    // the third is not invented.
-    let mut f = discrete_frame(1, 640, 480, 333333, &[333333, 500000]);
-    f[26] = 3; // one more than the descriptor carries
-    let alts = mjpeg_format(1, vec![f]);
+fn every_mjpeg_format_is_read() {
+    // A card may put 60 fps in one MJPEG format and 30/15 in another. Reading only the
+    // first format is what left a single rate in the list.
+    let mut extra = vec![11, 0x24, 0x06, 1, 1, 1, 0, 0, 0, 0, 0];
+    extra.extend(discrete_frame(1, 1920, 1080, 166666, &[166666]));
+    extra.extend(vec![11, 0x24, 0x06, 2, 1, 1, 0, 0, 0, 0, 0]);
+    extra.extend(discrete_frame(1, 1920, 1080, 333333, &[333333, 666666]));
+    let alts = vec![RawAlt {
+        interface: 1,
+        alt: 0,
+        class: 14,
+        subclass: 2,
+        endpoints: vec![],
+        extra,
+    }];
     assert_eq!(
         triples(&mjpeg_mode_list(&alts)),
-        vec![(640, 480, 30), (640, 480, 20)]
+        vec![(1920, 1080, 60), (1920, 1080, 30), (1920, 1080, 15)]
     );
+}
+
+#[test]
+fn a_descriptor_too_short_to_list_rates_falls_back_to_its_default() {
+    // bLength leaves room for the type byte but not a whole interval: the card's own
+    // default is still offered, and nothing past the end of the descriptor is invented.
+    let mut f = discrete_frame(1, 640, 480, 333333, &[333333]);
+    f.truncate(29);
+    f[0] = 29;
+    let alts = mjpeg_format(1, vec![f]);
+    assert_eq!(triples(&mjpeg_mode_list(&alts)), vec![(640, 480, 30)]);
 }
 
 #[test]
@@ -328,4 +354,21 @@ fn a_zero_interval_is_not_a_rate() {
     f[21..25].copy_from_slice(&0u32.to_le_bytes());
     let alts = mjpeg_format(1, vec![f]);
     assert_eq!(triples(&mjpeg_mode_list(&alts)), vec![(640, 480, 30)]);
+}
+
+#[test]
+fn the_descriptor_dump_shows_the_video_bytes_and_not_the_audio_ones() {
+    let alts = mjpeg_format(1, vec![discrete_frame(1, 640, 480, 333333, &[333333])]);
+    let dump = describe_streaming_descriptors(&alts);
+    assert!(dump.starts_with("video iface 1 alt 0:"));
+    assert!(dump.contains("24 06")); // the MJPEG format descriptor is in there
+    let audio = vec![RawAlt {
+        interface: 2,
+        alt: 0,
+        class: 1,
+        subclass: 2,
+        endpoints: vec![],
+        extra: vec![1, 2, 3],
+    }];
+    assert!(describe_streaming_descriptors(&audio).is_empty());
 }

@@ -90,6 +90,29 @@ fn walk<F: FnMut(u8, &[u8])>(extra: &[u8], mut f: F) {
     }
 }
 
+/// A hex dump of the video-streaming descriptors, for when a card does not list what it
+/// was expected to. Bounded so a chatty card cannot flood the log.
+pub fn describe_streaming_descriptors(alts: &[RawAlt]) -> String {
+    let mut out = String::new();
+    for a in alts
+        .iter()
+        .filter(|a| a.class == 14 && a.subclass == 2 && !a.extra.is_empty())
+    {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("video iface {} alt {}:", a.interface, a.alt));
+        for b in &a.extra {
+            out.push_str(&format!(" {:02x}", b));
+            if out.len() > 700 {
+                out.push_str(" ...");
+                return out;
+            }
+        }
+    }
+    out
+}
+
 fn u16le(b: &[u8]) -> u32 {
     (b[0] as u32) | ((b[1] as u32) << 8)
 }
@@ -193,18 +216,18 @@ pub fn mjpeg_mode_list(alts: &[RawAlt]) -> Vec<VideoMode> {
     let mut found: Vec<VideoMode> = Vec::new();
     for a in alts.iter().filter(|a| a.class == 14 && a.subclass == 2) {
         let mut in_mjpeg = false;
-        let mut done = false;
         let mut default_idx = 0u8;
         let mut modes: Vec<VideoMode> = Vec::new();
         walk(&a.extra, |t, d| {
-            if t != 0x24 || d.len() < 4 || done {
+            if t != 0x24 || d.len() < 4 {
                 return;
             }
             match d[2] {
                 0x06 => {
-                    if !modes.is_empty() {
-                        done = true; // only the first MJPEG format, as everywhere else here
-                    } else if d.len() >= 7 {
+                    if d.len() >= 7 {
+                        // Every MJPEG format is read. A card is free to spread its modes
+                        // over several of them, and stopping at the first would drop
+                        // whatever the later ones say.
                         in_mjpeg = true;
                         default_idx = d[5];
                     }
@@ -217,24 +240,49 @@ pub fn mjpeg_mode_list(alts: &[RawAlt]) -> Vec<VideoMode> {
                     let default_interval = u32le(&d[21..25]);
                     let is_default = d[3] == default_idx;
 
+                    // Byte 25 is bFrameIntervalType: 0 means the rates are a continuous
+                    // range, any other value is how many discrete rates follow. Either way
+                    // the values start at byte 26, so there is no separate count byte and
+                    // the list runs to the end of the descriptor. libuvc reads it from the
+                    // same offset, which is the offset the working modes agree with.
                     let mut intervals: Vec<u32> = Vec::new();
-                    if d.len() >= 31 && d[25] == 2 {
+                    if d[25] >= 1 {
                         // Discrete: the descriptor carries the whole list.
-                        for i in 0..d[26] as usize {
-                            let at = 27 + 4 * i;
+                        for i in 0..d[25] as usize {
+                            let at = 26 + 4 * i;
                             if at + 4 > d.len() {
                                 break;
                             }
                             intervals.push(u32le(&d[at..at + 4]));
                         }
+                    } else if d.len() >= 34 {
+                        // A range: every rate between the two ends, in the steps the card
+                        // says it takes. Offering only the ends would hide the rest.
+                        let lo = u32le(&d[26..30]);
+                        let hi = u32le(&d[30..34]);
+                        let step = if d.len() >= 38 { u32le(&d[34..38]) } else { 0 };
+                        if lo > 0 && hi >= lo {
+                            if step > 0 {
+                                let mut iv = lo;
+                                while iv <= hi && intervals.len() < 64 {
+                                    intervals.push(iv);
+                                    match iv.checked_add(step) {
+                                        Some(next) => iv = next,
+                                        None => break,
+                                    }
+                                }
+                            } else {
+                                intervals.push(lo);
+                                if hi != lo {
+                                    intervals.push(hi);
+                                }
+                            }
+                        }
                     }
                     if intervals.is_empty() {
-                        // A range, or a descriptor that says nothing useful.
+                        // A descriptor that says nothing useful: the card's own default is
+                        // still worth offering, since it is what the camera path uses.
                         intervals.push(default_interval);
-                        if d.len() >= 35 && d[25] == 1 {
-                            intervals.push(u32le(&d[27..31])); // fastest
-                            intervals.push(u32le(&d[31..35])); // slowest
-                        }
                     }
 
                     for interval in intervals {

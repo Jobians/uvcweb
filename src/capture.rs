@@ -107,6 +107,10 @@ pub fn probe_modes(fd: i32) -> Result<Vec<descriptors::VideoMode>, i32> {
             }
         };
         let modes = descriptors::mjpeg_mode_list(&alts);
+        let dump = descriptors::describe_streaming_descriptors(&alts);
+        if !dump.is_empty() {
+            say!("video descriptors: {}", dump);
+        }
         uvc_close(devh);
         uvc_exit(ctx);
         if modes.is_empty() {

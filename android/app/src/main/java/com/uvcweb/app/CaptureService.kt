@@ -127,21 +127,71 @@ class CaptureService : Service() {
             stopEverything("Stopped")
             return START_NOT_STICKY
         }
-        startInForeground("Starting...")
 
-        synchronized(lock) {
-            if (state != State.STOPPED) {
-                Util.appendLog(this, "start requested while already $state - ignored")
+        val reconfigure = intent.action == ACTION_RECONFIGURE
+        val running = synchronized(lock) { state != State.STOPPED }
+        if (reconfigure) {
+            if (running && modeUnchanged()) {
+                Util.appendLog(this, "the camera is already using the chosen mode - nothing to do")
                 return START_NOT_STICKY
             }
+        } else if (running) {
+            Util.appendLog(this, "start requested while already $state - ignored")
+            return START_NOT_STICKY
+        }
+
+        val verb = if (running) "Restarting..." else "Starting..."
+        startInForeground(verb)
+        synchronized(lock) {
             state = State.STARTING
-            message = "Starting..."
+            message = verb
         }
         stopRequested = false
-        deviceName = intent.getStringExtra(EXTRA_DEVICE_NAME)
-        val name = deviceName
-        Thread { runCapture(name) }.start()
+
+        if (running) {
+            // A mode change has to let go of the card and take it again, because the size and
+            // rate are fixed once the engine starts. The service, and its notification, stay up.
+            Util.appendLog(this, "restarting the camera with the chosen mode...")
+            Thread { reconfigureCapture() }.start()
+        } else {
+            deviceName = intent.getStringExtra(EXTRA_DEVICE_NAME)
+            val name = deviceName
+            Thread { runCapture(name) }.start()
+        }
         return START_NOT_STICKY
+    }
+
+    /** True when the settings on disk name the very size and rate the running engine uses. */
+    private fun modeUnchanged(): Boolean {
+        val s = Settings.load(this)
+        return s.width == activeWidth && s.height == activeHeight && s.fps == activeFps
+    }
+
+    /**
+     * Lets go of the card and brings the engine straight back up with the settings the screen has
+     * just saved, so a new size or rate takes effect without the user stopping and starting. The
+     * foreground service and its notification stay up; only the capture session is replaced. A
+     * recording that was running is sealed by the recorder as the old session ends.
+     */
+    private fun reconfigureCapture() {
+        unregisterMdns()
+        try {
+            Native.stop()
+        } catch (e: Throwable) {
+            Util.appendLog(this, "Native.stop() threw (${e}); the native library may not have been loaded")
+        }
+        try {
+            connection?.close()
+        } catch (e: Exception) {
+            Util.appendLog(this, "closing the USB connection threw (${e})")
+        }
+        connection = null
+        releaseWakeLock()
+        if (stopRequested) {
+            doStop("Stopped")
+            return
+        }
+        runCapture(deviceName)
     }
 
     /** Background thread: open the card and start the Rust engine. Every path out of this
@@ -236,6 +286,7 @@ class CaptureService : Service() {
         }
 
         synchronized(lock) {
+            noteRunningMode(settings.width, settings.height, settings.fps)
             state = State.RUNNING
             message = "Running"
         }
@@ -442,6 +493,10 @@ class CaptureService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.uvcweb.app.STOP"
+
+        /** Asks a running capture to be replaced with whatever [Settings] now say, keeping the
+         * service (and its foreground notification) up. */
+        const val ACTION_RECONFIGURE = "com.uvcweb.app.RECONFIGURE"
         const val EXTRA_DEVICE_NAME = "deviceName"
         private const val CHANNEL_ID = "capture"
         private const val NOTIFICATION_ID = 1
@@ -452,6 +507,26 @@ class CaptureService : Service() {
 
         @Volatile
         var message: String = "Stopped"
+
+        // The size and rate the running engine was started with. The card takes them together
+        // and they cannot be changed while it runs, so a change means a restart - and knowing
+        // what is running lets a restart that would change nothing be ignored.
+        @Volatile private var activeWidth = 0
+        @Volatile private var activeHeight = 0
+        @Volatile private var activeFps = 0
+
+        /** True while the engine is running with exactly this size and rate. The main screen
+         * uses this to notice a mode change that arrived while the stream was restarting and
+         * so was not applied, and ask for it again. */
+        fun isRunningMode(width: Int, height: Int, fps: Int): Boolean =
+            state == State.RUNNING && width == activeWidth && height == activeHeight &&
+                fps == activeFps
+
+        fun noteRunningMode(width: Int, height: Int, fps: Int) {
+            activeWidth = width
+            activeHeight = height
+            activeFps = fps
+        }
 
         /** True once mDNS has actually confirmed at least one service registered - not just
          * requested. Read by the main screen so it only shows the .local URL when it will really

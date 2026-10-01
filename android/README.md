@@ -54,13 +54,18 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 2. Choose Web viewer and/or RTSP, ports, a **resolution** and a **frame rate**. Both lists are read
    from the card itself, so they hold the sizes and the rates that card says it can do, plus
    "Let the card choose" for the size (its own default) and a "Custom" entry for a card that lists
-   something wrong. The two are separate choices: any listed resolution can be paired with any
-   listed rate, and the line under them says what will be asked for. A card takes a size and a
-   rate together, so a pairing it never listed may be refused at Start - the line under the two
-   lists says so when that is the case. The lists need USB permission for the card, which is also
-   needed to stream: press **Detect modes** to be asked for it, and from then on they are filled
-   in on their own whenever the app comes back to the screen with the card plugged in and not
-   streaming.
+   something wrong. The rates are the ones the chosen resolution was listed at, and change with
+   it, so a size-and-rate combination the card never advertised cannot be picked. Typing one in
+   under "Custom" is allowed, but the line under the lists warns when the card does not list
+   that combination, since it may refuse it at Start. The lists need USB permission for
+   the card, which is also needed to stream: press **Detect modes** to be asked for it, and from
+   then on they are filled in on their own whenever the app comes back to the screen with the
+   card plugged in and not streaming.
+   Changing the resolution or frame rate **while streaming restarts the stream** with the new
+   mode on its own - the notification and the service stay up, only the capture is replaced. A
+   recording that was in progress is finished and saved as the old capture ends. A hand-typed
+   Custom mode is applied the same way once it is whole and the card lists it; an unlisted one is
+   left alone (the line above says so) and only tried at the next Start.
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
    On Android 9 and older it also asks for storage permission, which is only needed to put a finished

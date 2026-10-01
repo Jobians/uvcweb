@@ -96,23 +96,27 @@ class MainActivity : Activity() {
   }
 
   /**
-   * One frame rate the card lists, in whole frames a second. A rate of 0 is the
-   * placeholder shown before the card has been asked, and means "whatever the engine
-   * falls back to" - which is why it is not the same as an offered rate.
+   * One frame rate the resolution the spinner is on supports, in whole frames a second.
+   * A rate of 0 means the card's own rate, which is what "Let the card choose" offers and
+   * what a size with no rate list falls back to.
    */
   private class Rate(val fps: Int, val isDefault: Boolean = false) {
     val label: String
       get() = when {
-        fps == 0 -> "not read from the card yet"
+        fps == 0 -> "the card's own rate"
         isDefault -> "%d fps  -  the card's default".format(Locale.US, fps)
         else -> "%d fps".format(Locale.US, fps)
       }
   }
 
-  /** One size-and-rate the card listed, kept so an unlisted pair can be recognised. */
+  /** One size-and-rate the card listed, used to work out the rates each size was listed at. */
   private class Detected(val width: Int, val height: Int, val fps: Int, val isDefault: Boolean)
 
-  /** What the two spinners are showing, in the same order. */
+  /**
+   * What the two spinners are showing, in the same order. The rates are only the ones the
+   * chosen resolution was listed at, so a combination the card never advertised cannot be
+   * put together through the spinners.
+   */
   private var resolutionList: List<Resolution> = emptyList()
   private var rateList: List<Rate> = emptyList()
   private var detectedList: List<Detected> = emptyList()
@@ -197,15 +201,27 @@ class MainActivity : Activity() {
 
     showSettings(Settings.load(this))
 
-    val onPicked = object : AdapterView.OnItemSelectedListener {
+    val onResolutionPicked = object : AdapterView.OnItemSelectedListener {
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+        // The rates belong to the size: changing the size changes what the rate spinner
+        // may offer, and the rate that was chosen is kept when the new size also has it.
+        refreshRates(selectedRate()?.fps ?: 0)
         showSelectedMode()
+        modeChanged()
       }
 
       override fun onNothingSelected(parent: AdapterView<*>?) {}
     }
-    resolutionSpinner.onItemSelectedListener = onPicked
-    fpsSpinner.onItemSelectedListener = onPicked
+    val onRatePicked = object : AdapterView.OnItemSelectedListener {
+      override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+        showSelectedMode()
+        modeChanged()
+      }
+
+      override fun onNothingSelected(parent: AdapterView<*>?) {}
+    }
+    resolutionSpinner.onItemSelectedListener = onResolutionPicked
+    fpsSpinner.onItemSelectedListener = onRatePicked
 
     // The summary line has to follow a hand-typed mode as it is typed, or it would
     // still be describing the last one while the fields show something else.
@@ -215,7 +231,10 @@ class MainActivity : Activity() {
       override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
 
       override fun afterTextChanged(s: Editable?) {
-        if (customModeRow.visibility == View.VISIBLE) showSelectedMode()
+        if (customModeRow.visibility == View.VISIBLE) {
+          showSelectedMode()
+          modeChanged()
+        }
       }
     }
     widthEdit.addTextChangedListener(typed)
@@ -300,7 +319,6 @@ class MainActivity : Activity() {
     // the real list arrives.
     showModes(
         listOf(Resolution(0, 0), Resolution(0, 0, custom = true)),
-        listOf(Rate(0)),
         emptyList(),
         s.width, s.height, s.fps,
     )
@@ -342,40 +360,75 @@ class MainActivity : Activity() {
   private fun selectedRate(): Rate? = rateList.getOrNull(fpsSpinner.selectedItemPosition)
 
   /**
-   * Fills both lists and puts each one on the entry the saved settings ask for, when
-   * the card offers it - so a choice survives the list being asked for again, and a
-   * size or rate the card does not list falls back to the first entry instead of
-   * being silently kept.
+   * Fills the resolution list, then the rates for whichever resolution ends up chosen, and
+   * puts each on the entry the saved settings ask for when the card offers it - so a choice
+   * survives the list being asked for again, and a size or rate the card does not list falls
+   * back instead of being silently kept.
    *
-   * The two are chosen independently, which is the point: any listed resolution can be
-   * paired with any listed rate. [found] is the card's own list of size-and-rate pairs,
-   * kept so [showSelectedMode] can say when a pairing was never offered.
+   * [found] is the card's own list of size-and-rate pairs; the rate list is built from it so
+   * the second spinner only ever offers rates the chosen size was actually listed at.
    */
   private fun showModes(
     resolutions: List<Resolution>,
-    rates: List<Rate>,
     found: List<Detected>,
     width: Int,
     height: Int,
     fps: Int,
   ) {
     resolutionList = resolutions
-    rateList = rates
     detectedList = found
 
     resolutionSpinner.adapter = spinnerAdapter(resolutions.map { it.label })
-    fpsSpinner.adapter = spinnerAdapter(rates.map { it.label })
 
     val wantedResolution = resolutions.indexOfFirst {
       !it.custom && it.width == width && it.height == height
     }
     resolutionSpinner.setSelection(if (wantedResolution >= 0) wantedResolution else 0, false)
 
-    val wantedRate = rates.indexOfFirst { it.fps == fps }
-    fpsSpinner.setSelection(if (wantedRate >= 0) wantedRate else 0, false)
-
+    refreshRates(fps)
     resolutionLabel.text = "Resolution"
     showSelectedMode()
+  }
+
+  /**
+   * Rebuilds the rate list from the resolution the spinner is on, and puts the rate back on
+   * [preferredFps] when that resolution supports it. This is what stops the second spinner
+   * from offering a rate the chosen size can never be shot at.
+   */
+  private fun refreshRates(preferredFps: Int) {
+    val rates = ratesFor(selectedResolution())
+    rateList = rates
+    fpsSpinner.adapter = spinnerAdapter(rates.map { it.label })
+
+    val wanted = rates.indexOfFirst { it.fps == preferredFps && preferredFps > 0 }
+    val fallback = rates.indexOfFirst { it.isDefault }
+    fpsSpinner.setSelection(
+        if (wanted >= 0) wanted else if (fallback >= 0) fallback else 0,
+        false,
+    )
+  }
+
+  /**
+   * The rates the card listed for [resolution]. "Let the card choose" and Custom offer only
+   * the card's own rate, and a listed size offers exactly the rates it was listed at.
+   */
+  private fun ratesFor(resolution: Resolution?): List<Rate> {
+    if (resolution == null || resolution.custom || resolution.width == 0) {
+      return listOf(Rate(0))
+    }
+    val rates = ArrayList<Rate>()
+    val seen = HashSet<Int>()
+    for (m in detectedList
+        .filter { it.width == resolution.width && it.height == resolution.height }
+        .sortedByDescending { it.fps }) {
+      if (seen.add(m.fps)) {
+        rates.add(Rate(m.fps, isDefault = m.isDefault))
+      }
+    }
+    if (rates.isEmpty()) {
+      rates.add(Rate(0))
+    }
+    return rates
   }
 
   private fun spinnerAdapter(labels: List<String>): ArrayAdapter<String> {
@@ -385,12 +438,10 @@ class MainActivity : Activity() {
   }
 
   /**
-   * Says what the two spinners add up to, which is the one line that matters: the
-   * card takes a size and a rate together, so a pairing it never listed is very likely
-   * to be refused, and that is worth saying before Start is pressed rather than after.
-   *
-   * It also shows the manual size fields, which only apply while "Custom" is chosen -
-   * until then the two spinners are the whole of the choice.
+   * Says what the two spinners add up to, and shows the manual size fields while "Custom"
+   * is chosen. The rates are the ones the chosen size was listed at, so an unlisted pairing
+   * cannot be reached through the spinners; a hand-typed Custom mode is checked against the
+   * detected modes instead, and warned about when the card does not list it.
    */
   private fun showSelectedMode() {
     val custom = selectedResolution()?.custom == true
@@ -410,14 +461,61 @@ class MainActivity : Activity() {
     }
     val frames = when {
       custom -> fpsEdit.text.toString().ifEmpty { "?" } + " fps"
-      rate == null || rate.fps == 0 ->
-          if (resolution?.width == 0) "its own rate" else "30 fps (this app's fallback)"
+      rate == null || rate.fps == 0 -> "the card's own rate"
       else -> "%d fps".format(Locale.US, rate.fps)
     }
-    val unlisted = !custom && resolution != null && resolution.width > 0 && rate != null && rate.fps > 0 &&
-        detectedList.none { it.width == resolution.width && it.height == resolution.height && it.fps == rate.fps }
+    val unlisted = custom && !customModeIsListed()
     modeSummary.text = "MJPEG $size @ $frames" +
-        if (unlisted) "\nthe card does not list that size at that rate - it may refuse to start" else ""
+        if (unlisted) "\nthe card does not list that mode - it may refuse to start" else ""
+  }
+
+  /**
+   * Whether a hand-typed Custom mode is one the card said it can do. A card that has not
+   * been asked yet has no detected modes to check against, and a half-typed mode cannot be
+   * checked, so neither is treated as unlisted.
+   */
+  private fun customModeIsListed(): Boolean {
+    if (detectedList.isEmpty()) return true
+    val width = widthEdit.text.toString().toIntOrNull() ?: return true
+    val height = heightEdit.text.toString().toIntOrNull() ?: return true
+    val fps = fpsEdit.text.toString().toIntOrNull() ?: return true
+    if (width <= 0 || height <= 0 || fps <= 0) return true
+    return detectedList.any { it.width == width && it.height == height && it.fps == fps }
+  }
+
+  /**
+   * The card takes a size and a rate together and neither can be changed while it streams, so a
+   * new mode means the running stream is torn down and brought back up with it. Picking a size
+   * re-picks a rate too, so a change arrives as a pair; waiting a moment and restarting once
+   * turns that into a single restart. Only a stream that is actually running is restarted -
+   * otherwise the new mode is simply saved and used at the next Start.
+   */
+  private val applyModeChange = Runnable {
+    if (CaptureService.state != CaptureService.State.RUNNING) return@Runnable
+    val settings = readSettings()
+    settings.save(this)
+    startService(
+        Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_RECONFIGURE))
+  }
+
+  private fun modeChanged() {
+    if (CaptureService.state != CaptureService.State.RUNNING) return
+    val custom = selectedResolution()?.custom == true
+    if (custom) {
+      // A hand-typed mode only restarts the stream once it is whole and the card listed it.
+      // Half-typed or unlisted values are left alone here: the warning above says so, and
+      // Stop/Start still tries them.
+      val width = widthEdit.text.toString().toIntOrNull() ?: 0
+      val height = heightEdit.text.toString().toIntOrNull() ?: 0
+      val fps = fpsEdit.text.toString().toIntOrNull() ?: 0
+      if (width <= 0 || height <= 0 || fps <= 0) return
+      if (detectedList.isNotEmpty() &&
+          detectedList.none { it.width == width && it.height == height && it.fps == fps }) {
+        return
+      }
+    }
+    handler.removeCallbacks(applyModeChange)
+    handler.postDelayed(applyModeChange, 350)
   }
 
   /**
@@ -527,7 +625,8 @@ class MainActivity : Activity() {
         }
         // The card's own default comes first, so a card that offers nothing useful still
         // leaves a choice that works; the custom entry is the way out of a card whose
-        // list is wrong.
+        // list is wrong. Each size is listed once, largest picture first, and the rates
+        // for a size are worked out from this same list when that size is picked.
         val own = modes.firstOrNull { it.isDefault }
         val resolutions = ArrayList<Resolution>()
         resolutions.add(Resolution(0, 0))
@@ -541,28 +640,14 @@ class MainActivity : Activity() {
         }
         resolutions.add(Resolution(0, 0, custom = true))
 
-        // The rates on their own, fastest first. Every rate the card listed at any size
-        // is offered at every size, which is what makes the two choices independent.
-        val rates = ArrayList<Rate>()
-        val seenRates = HashSet<Int>()
-        for (m in modes.sortedByDescending { it.fps }) {
-          if (seenRates.add(m.fps)) {
-            rates.add(Rate(m.fps, isDefault = own?.fps == m.fps))
-          }
-        }
-
         val wanted = readSettings()
-        showModes(resolutions, rates, modes, wanted.width, wanted.height, wanted.fps)
+        showModes(resolutions, modes, wanted.width, wanted.height, wanted.fps)
         Util.appendLog(
             this,
             "the card lists ${modes.size} size-and-rate combination(s): " +
                 modes.joinToString(", ") { "${it.width}x${it.height}@${it.fps}" } +
                 (if (own == null) ", and names none of them as its own default"
                 else ", its own default is ${own.width} x ${own.height} @ ${own.fps} fps"),
-        )
-        Util.appendLog(
-            this,
-            "showing ${resolutions.size - 2} resolution(s) and ${rates.size} rate(s) as separate choices",
         )
       }
     }.start()
@@ -779,6 +864,12 @@ class MainActivity : Activity() {
     val settings = readSettings()
     viewerButton.isEnabled = running && settings.web
     urlText.text = if (running) buildUrlText(settings) else ""
+    // A mode change made while the stream was being restarted could not be applied then; now
+    // that it is running again, notice the mismatch and ask for it. The service ignores an
+    // ask that would change nothing, so this settles after one restart.
+    if (running && !CaptureService.isRunningMode(settings.width, settings.height, settings.fps)) {
+      modeChanged()
+    }
 
     val log = Util.tail(File(filesDir, Util.LOG_NAME))
     if (log != lastLog) {

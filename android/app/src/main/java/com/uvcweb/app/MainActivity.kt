@@ -13,13 +13,18 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.util.Locale
 
 /**
  * Main screen: choose what to serve, press Start. The capture itself runs in [CaptureService].
@@ -42,9 +47,13 @@ class MainActivity : Activity() {
   private lateinit var mdnsNameEdit: EditText
   private lateinit var autoReconnectCheck: CheckBox
   private lateinit var audioCheck: CheckBox
+  private lateinit var modeLabel: TextView
+  private lateinit var modeSpinner: Spinner
+  private lateinit var customModeRow: View
   private lateinit var widthEdit: EditText
   private lateinit var heightEdit: EditText
   private lateinit var fpsEdit: EditText
+  private lateinit var detectModesButton: Button
   private lateinit var startButton: Button
   private lateinit var viewerButton: Button
   private lateinit var recordButton: Button
@@ -57,7 +66,43 @@ class MainActivity : Activity() {
   private lateinit var logScroll: ScrollView
   private lateinit var clearLogButton: Button
 
+  /** One line of the video mode list. A width of 0 means "let the card decide". */
+  private class Mode(
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+    val custom: Boolean,
+    /** The card named this as the one it would start on by itself. */
+    val isDefault: Boolean = false,
+  ) {
+    val label: String
+      get() = when {
+        custom -> "Custom (type a size and rate)"
+        width == 0 -> "Let the card choose (its own default)"
+        // Locale.US, so a phone set to a language that groups digits does not turn
+        // 1920 into "1.920".
+        isDefault -> "%d x %d @ %d fps  -  the card's default".format(Locale.US, width, height, fps)
+        else -> "%d x %d @ %d fps".format(Locale.US, width, height, fps)
+      }
+  }
+
+  /** What the spinner is showing, in the same order. */
+  private var modeList: List<Mode> = emptyList()
+
+  /** True while a probe is in flight, so the card is not opened twice at once. */
+  @Volatile private var modesProbing = false
+
+  /** How many times a Start tap has waited for a probe to finish. */
+  private var startWaits = 0
+
+  /** The card and engine state the last probe was for, so it is not repeated. */
+  private var probedFor: String? = null
+
   private var pendingDeviceName: String? = null
+
+  /** True when the pending USB permission was asked for to read the mode list, not to stream. */
+  private var probeAfterPermission = false
+
   private var lastLog = ""
 
   private val usbPermissionReceiver = object : BroadcastReceiver() {
@@ -65,11 +110,18 @@ class MainActivity : Activity() {
       if (intent.action != ACTION_USB_PERMISSION) return
       val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
       val name = pendingDeviceName
-      if (granted && name != null) {
-        startCapture(name)
-      } else {
+      if (!granted) {
         toast("USB permission was refused")
+        return
       }
+      if (probeAfterPermission) {
+        // The permission was asked for to read the card's mode list, not to stream.
+        probeAfterPermission = false
+        probedFor = null
+        probeModes(asked = true)
+        return
+      }
+      if (name != null) startCapture(name)
     }
   }
 
@@ -97,9 +149,13 @@ class MainActivity : Activity() {
     mdnsNameEdit = findViewById(R.id.mdnsNameEdit)
     autoReconnectCheck = findViewById(R.id.autoReconnectCheck)
     audioCheck = findViewById(R.id.audioCheck)
+    modeLabel = findViewById(R.id.modeLabel)
+    modeSpinner = findViewById(R.id.modeSpinner)
+    customModeRow = findViewById(R.id.customModeRow)
     widthEdit = findViewById(R.id.widthEdit)
     heightEdit = findViewById(R.id.heightEdit)
     fpsEdit = findViewById(R.id.fpsEdit)
+    detectModesButton = findViewById(R.id.detectModesButton)
     startButton = findViewById(R.id.startButton)
     viewerButton = findViewById(R.id.viewerButton)
     recordButton = findViewById(R.id.recordButton)
@@ -111,6 +167,16 @@ class MainActivity : Activity() {
 
     showSettings(Settings.load(this))
 
+    modeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+      override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+        showSelectedMode()
+      }
+
+      override fun onNothingSelected(parent: AdapterView<*>?) {}
+    }
+    detectModesButton.setOnClickListener {
+      probeModes(asked = true)
+    }
     mdnsCheck.setOnCheckedChangeListener {
       _, checked ->
       mdnsNameEdit.isEnabled = checked
@@ -140,6 +206,15 @@ class MainActivity : Activity() {
   override fun onResume() {
     super.onResume()
     handler.post(ticker)
+    // The card is asked what it can do as soon as it is there to be asked, so the list is
+    // there before Start is pressed. It is only possible with USB permission in hand and
+    // while nothing is streaming; the button covers the rest.
+    val device = Util.findCaptureDevice(usb)
+    val forWhat = device?.deviceName + "/" + CaptureService.state
+    if (device != null && forWhat != probedFor) {
+      probedFor = forWhat
+      probeModes(asked = false)
+    }
   }
 
   override fun onPause() {
@@ -173,10 +248,15 @@ class MainActivity : Activity() {
     widthEdit.setText(s.width.toString())
     heightEdit.setText(s.height.toString())
     fpsEdit.setText(s.fps.toString())
+    // Until the card has said what it can do, the list holds the card's own default and
+    // the custom entry; the saved size is what the list is matched against when it arrives.
+    showModeList(listOf(Mode(0, 0, 0, custom = false), Mode(0, 0, 0, custom = true)), s.width, s.height, s.fps)
   }
 
   private fun readSettings(): Settings {
     val d = Settings()
+    val mode = selectedMode()
+    val custom = mode?.custom == true
     return Settings(
       web = webCheck.isChecked,
       webPort = webPortEdit.text.toString().toIntOrNull() ?: d.webPort,
@@ -189,10 +269,182 @@ class MainActivity : Activity() {
       },
       autoReconnect = autoReconnectCheck.isChecked,
       audio = audioCheck.isChecked,
-      width = widthEdit.text.toString().toIntOrNull() ?: 0,
-      height = heightEdit.text.toString().toIntOrNull() ?: 0,
-      fps = fpsEdit.text.toString().toIntOrNull() ?: 0,
+      // A chosen mode is a size and a rate. "Let the card choose" is all zeros, which is
+      // how the engine is told to pick the card's own default. A custom size is passed as
+      // typed, so a card that will not take it says so instead of being second-guessed.
+      width = if (custom) (widthEdit.text.toString().toIntOrNull() ?: 0) else (mode?.width ?: 0),
+      height = if (custom) (heightEdit.text.toString().toIntOrNull() ?: 0) else (mode?.height ?: 0),
+      fps = if (custom) (fpsEdit.text.toString().toIntOrNull() ?: 0) else (mode?.fps ?: 0),
     )
+  }
+
+  // ------------------------------------------------------------------ video mode list
+
+  /** The entry the spinner is on, or null if the list is empty. */
+  private fun selectedMode(): Mode? = modeList.getOrNull(modeSpinner.selectedItemPosition)
+
+  /**
+   * Fills the mode list and puts the spinner on the entry for [width]/[height]/[fps],
+   * so a choice survives the list being asked for again - and a size the card does not
+   * list falls back to the card's own default instead of being silently kept.
+   * [keepCustom] keeps a hand-typed mode on the custom entry, which the search above
+   * cannot match against the card's own list.
+   */
+  private fun showModeList(
+    modes: List<Mode>,
+    width: Int,
+    height: Int,
+    fps: Int,
+    keepCustom: Boolean = false,
+  ) {
+    modeList = modes
+    val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modes.map { it.label })
+    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+    modeSpinner.adapter = adapter
+
+    val wanted = modes.indexOfFirst {
+      !it.custom && it.width == width && it.height == height && it.fps == fps
+    }
+    modeSpinner.setSelection(
+        if (wanted >= 0) wanted
+        else if (keepCustom) modes.indexOfFirst { it.custom }
+        else 0,
+        false,
+    )
+    modeLabel.text = "Video mode"
+    showSelectedMode()
+  }
+
+  /** The manual size fields are only shown when they are the one being used. */
+  private fun showSelectedMode() {
+    val custom = selectedMode()?.custom == true
+    customModeRow.visibility = if (custom) View.VISIBLE else View.GONE
+  }
+
+  /**
+   * Asks the card which sizes and rates it can do, and lists them.
+   *
+   * The card has to be opened to be asked, and it can only be opened when nothing is
+   * streaming from it - so this is skipped while the camera runs, and a probe asked for
+   * then says so instead of interrupting the stream. Asking is a fraction of a second,
+   * but it is not instant, so it happens on a thread of its own and every word it says
+   * comes back through [onMain].
+   *
+   * [asked] is true when the user pressed the button, which is when being refused for
+   * lack of USB permission is worth a message: otherwise the list is simply left as it is.
+   */
+  private fun probeModes(asked: Boolean) {
+    if (modesProbing) return
+    if (CaptureService.state != CaptureService.State.STOPPED) {
+      if (asked) toast("The mode list is read from the card itself, so it can only be asked while it is not streaming")
+      return
+    }
+    val device = Util.findCaptureDevice(usb)
+    if (device == null) {
+      if (asked) toast("No USB capture card found - plug it in")
+      return
+    }
+    if (!usb.hasPermission(device)) {
+      // Without permission the card's descriptors cannot be read at all. Ask for it: the
+      // list is worth having, and the same permission is needed to stream anyway. The
+      // answer comes back to the receiver, which then asks for the list and no more.
+      if (asked) {
+        pendingDeviceName = device.deviceName
+        probeAfterPermission = true
+        val intent = Intent(ACTION_USB_PERMISSION).setPackage(packageName)
+        val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+        try {
+          usb.requestPermission(device, PendingIntent.getBroadcast(this, 1, intent, flags))
+        } catch (e: SecurityException) {
+          probeAfterPermission = false
+          toast("Android refused: grant the Camera and Microphone permission in the app settings, then try again")
+        }
+      }
+      return
+    }
+
+    modesProbing = true
+    modeLabel.text = "Video mode (asking the card...)"
+    Thread {
+      var found: List<Mode> = emptyList()
+      var problem: String? = null
+      try {
+        val conn = usb.openDevice(device)
+        try {
+          // Four numbers per mode, and the card is asked again with a longer array if
+          // this one turns out to be too short. 256 modes is far more than any card lists.
+          var longs = 64
+          while (longs <= 1024) {
+            val into = LongArray(longs)
+            val count = Native.listModes(conn.fileDescriptor, into)
+            if (count > 0) {
+              found = ArrayList(count)
+              for (i in 0 until count) {
+                found.add(
+                    Mode(
+                        width = into[i * 4].toInt(),
+                        height = into[i * 4 + 1].toInt(),
+                        fps = into[i * 4 + 2].toInt(),
+                        custom = false,
+                        isDefault = into[i * 4 + 3] == 1L,
+                    )
+                )
+              }
+              break
+            }
+            if (count < 0) {
+              // The codes are the ones start() uses, but they mean something else here:
+              // nothing was asked of the card's video modes, they could not be read at all.
+              problem = when (-count) {
+                1 -> "libuvc could not start"
+                2 -> "could not open the capture card (permission missing, or unplugged?)"
+                3 -> "the card lists no MJPEG mode (this app only handles MJPEG)"
+                else -> "error $count"
+              }
+              break
+            }
+            longs *= 4
+          }
+          if (found.isEmpty() && problem == null) {
+            problem = "the card's list of sizes did not fit in ${longs} numbers"
+          }
+        } finally {
+          conn.close()
+        }
+      } catch (e: Exception) {
+        problem = "could not ask the card what it can do ($e)"
+      }
+      val modes = found
+      val message = problem
+      onMain {
+        modesProbing = false
+        if (modes.isEmpty()) {
+          if (message != null) {
+            Util.appendLog(this, "no mode list: $message")
+            if (asked) toast(message)
+          }
+          modeLabel.text = "Video mode (not read from the card - press Detect modes)"
+          return@onMain
+        }
+        // The card's own default comes first, so a card that offers nothing useful still
+        // leaves a choice that works; the custom entry is the way out of a card whose
+        // list is wrong.
+        val list = ArrayList<Mode>(modes.size + 2)
+        list.add(Mode(0, 0, 0, custom = false))
+        list.addAll(modes)
+        list.add(Mode(0, 0, 0, custom = true))
+        val wanted = readSettings()
+        showModeList(list, wanted.width, wanted.height, wanted.fps, keepCustom = selectedMode()?.custom == true)
+        val defaults = modes.filter { it.isDefault }
+        Util.appendLog(
+            this,
+            "the card lists ${modes.size} size(s): " +
+                modes.joinToString(", ") { "${it.width}x${it.height}@${it.fps}" } +
+                if (defaults.isEmpty()) ", and names none of them as its own default"
+                else ", its own default is ${defaults[0].width} x ${defaults[0].height} @ ${defaults[0].fps} fps"
+        )
+      }
+    }.start()
   }
 
   // ------------------------------------------------------------------ start / stop
@@ -202,6 +454,17 @@ class MainActivity : Activity() {
       startService(Intent(this, CaptureService::class.java).setAction(CaptureService.ACTION_STOP))
       return
     }
+    if (modesProbing) {
+      // A probe in flight is holding the card open to read it. Streaming would have the
+      // two compete for the same interfaces, so the tap waits - a fraction of a second -
+      // and goes ahead anyway if the probe somehow never comes back.
+      if (startWaits++ < 30) {
+        handler.postDelayed({ if (!isFinishing && !isDestroyed) onStartStopClicked() }, 100)
+        return
+      }
+      startWaits = 0
+    }
+    startWaits = 0
     val settings = readSettings()
     if (!settings.web && !settings.rtsp) {
       toast("Switch on the web viewer or the RTSP server")
@@ -256,6 +519,7 @@ class MainActivity : Activity() {
       return
     }
     pendingDeviceName = device.deviceName
+    probeAfterPermission = false // this permission is for streaming, not for a mode list
     val intent = Intent(ACTION_USB_PERMISSION).setPackage(packageName)
     // Android fills in extras, so the PendingIntent must be mutable on Android 12+.
     val flags = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0

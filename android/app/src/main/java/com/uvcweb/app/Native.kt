@@ -41,6 +41,22 @@ object Native {
     external fun isRunning(): Boolean
 
     /**
+     * The picture sizes and rates the card in [fd] says it can do, four numbers per
+     * mode into [into]: width, height, frames a second, and 1 on the one the card
+     * would start on by itself.
+     *
+     * The card is opened to be asked and closed again - nothing is streamed, and
+     * nothing is left claimed - so this is safe to call before a session starts. It
+     * cannot be asked while the card is already streaming, because then it cannot be
+     * opened a second time.
+     *
+     * Returns how many modes were written, 0 if [into] is too short to hold them all
+     * (try again with a longer array), or a negative error code (see [describeError]).
+     */
+    @JvmStatic
+    external fun listModes(fd: Int, into: LongArray): Int
+
+    /**
      * Starts recording everything the session streams into the folder named by the
      * environment variable UVCWEB_RECORD_DIR (see CaptureService).
      * Returns 0 on success, otherwise [describeError].
@@ -133,7 +149,7 @@ object Native {
     fun describeError(code: Int): String = when (code) {
         1 -> "libuvc could not start"
         2 -> "could not open the capture card (permission missing, or unplugged?)"
-        3 -> "the card has no such video mode - try another size, or 0 x 0 for the card's default"
+        3 -> "the card would not take that video mode - pick another one from the list"
         4 -> "video streaming failed - try a smaller size or a lower frame rate"
         5 -> "a network port is already in use - pick another port"
         -100 -> "already running"

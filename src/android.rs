@@ -2,10 +2,12 @@
 
 //! JNI entry points for the Android app (see `android/`). Only compiled for Android.
 //!
-//! They take **primitive arguments only** - with one exception, the encoder feed,
-//! where the app hands us a `byte[]` to fill. That needs three functions out of
-//! the JNI table, which are reached through the `JNIEnv*` every native method is
-//! given (see "the JNI table" below) so the crate keeps no dependencies. Matching
+//! They take **primitive arguments only**, plus the arrays the app hands us to
+//! fill: a `byte[]` for the encoder feed, a `LongArray` for the numbers the app
+//! reads back. Filling an array needs three functions out of the JNI table, which
+//! are reached through the `JNIEnv*` every native method is given (see "the JNI
+//! table" below) so the crate keeps no dependencies. Nothing hands a Java array
+//! back: the app passes one in and is told how much of it was filled. Matching
 //! Kotlin:
 //!
 //! ```kotlin
@@ -17,6 +19,7 @@
 //!                                   webPort: Int, rtspPort: Int, avOffsetMs: Int): Int
 //!     @JvmStatic external fun stop()
 //!     @JvmStatic external fun isRunning(): Boolean
+//!     @JvmStatic external fun listModes(fd: Int, into: LongArray): Int
 //!     @JvmStatic external fun startRecord(): Int
 //!     @JvmStatic external fun stopRecord(): Int
 //!     @JvmStatic external fun isRecording(): Boolean
@@ -31,7 +34,7 @@
 //!     @JvmStatic external fun feedPull(kind: Int, into: ByteArray): Int
 //!     @JvmStatic external fun feedAudioFormat(): Long      // rate << 32 | channels, -1 if none
 //!     @JvmStatic external fun feedVideoFps(): Double
-//!     @JvmStatic external fun feedStats(): LongArray
+//!     @JvmStatic external fun feedStats(into: LongArray): Int
 //! ```
 
 //!
@@ -173,6 +176,48 @@ pub extern "C" fn Java_com_uvcweb_app_Native_isRunning(
     } else {
         0
     }
+}
+
+/// The picture sizes and rates the card in `fd` says it can do, four numbers per
+/// mode: width, height, frames a second, and 1 on the one the card would start on
+/// by itself. The card is opened to be asked and closed again, so nothing is
+/// streamed and nothing is left claimed - but it cannot be asked while it is
+/// already streaming, because then it cannot be opened a second time.
+///
+/// Returns how many modes were written, 0 if `into` is null or too short to hold
+/// them all, or a negative number if the card could not be asked (the same codes
+/// `start` uses: 1 = libuvc would not start, 2 = the card would not open, 3 = its
+/// descriptors list no MJPEG mode).
+#[no_mangle]
+pub extern "C" fn Java_com_uvcweb_app_Native_listModes(
+    env: *mut c_void,
+    _class: *mut c_void,
+    fd: i32,
+    into: *mut c_void,
+) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        if into.is_null() || !jni_table_ok(env) {
+            return 0;
+        }
+        let modes = match crate::capture::probe_modes(fd) {
+            Ok(modes) => modes,
+            Err(code) => return -code,
+        };
+        let mut numbers: Vec<i64> = Vec::with_capacity(modes.len() * 4);
+        for m in &modes {
+            numbers.push(m.width as i64);
+            numbers.push(m.height as i64);
+            numbers.push(m.fps as i64);
+            numbers.push(if m.is_default { 1 } else { 0 });
+        }
+        let room = unsafe { jnitable::array_length(env, into) };
+        if room < numbers.len() as i32 {
+            return 0;
+        }
+        unsafe { jnitable::set_longs(env, into, 0, &numbers) };
+        modes.len() as i32
+    }))
+    .unwrap_or(0)
 }
 
 /// Starts a recording of everything the session streams into the directory named by

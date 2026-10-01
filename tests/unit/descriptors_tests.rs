@@ -18,7 +18,9 @@ fn frame_desc(idx: u8, w: u16, h: u16, interval: u32) -> Vec<u8> {
 
 #[test]
 fn uvc_default_mode() {
-    let mut extra = vec![11, 0x24, 0x06, 1, 3, 0, 2, 0, 0, 0, 0]; // MJPEG format, default frame 2
+    // bLength, type, MJPEG, format 1, 3 frame descriptors, default frame 2, then the
+    // guid would start at index 6.
+    let mut extra = vec![11, 0x24, 0x06, 1, 3, 2, 0, 0, 0, 0, 0];
     extra.extend(frame_desc(1, 1920, 1080, 333333));
     extra.extend(frame_desc(2, 1280, 720, 166666));
     extra.extend(frame_desc(3, 640, 480, 333333));
@@ -144,4 +146,186 @@ fn malformed_descriptors_do_not_panic() {
     let a = audio_alts(&alts);
     assert_eq!(a.len(), 1);
     assert!(choose_audio(&a, 48000, 2).is_none());
+}
+
+// ------------------------------------------------------- the mode list
+
+/// One MJPEG format holding `frames` frame descriptors, default frame `default_idx`.
+fn mjpeg_format(default_idx: u8, frames: Vec<Vec<u8>>) -> Vec<RawAlt> {
+    let mut extra = vec![
+        11,
+        0x24,
+        0x06,
+        1,
+        frames.len() as u8,
+        default_idx,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    for f in frames {
+        extra.extend(f);
+    }
+    vec![RawAlt {
+        interface: 1,
+        alt: 0,
+        class: 14,
+        subclass: 2,
+        endpoints: vec![],
+        extra,
+    }]
+}
+
+/// A frame descriptor for one size that lists `intervals` as discrete rates.
+fn discrete_frame(idx: u8, w: u16, h: u16, default_interval: u32, intervals: &[u32]) -> Vec<u8> {
+    let mut d = vec![0u8; 27 + 4 * intervals.len()];
+    d[0] = d.len() as u8;
+    d[1] = 0x24;
+    d[2] = 0x07;
+    d[3] = idx;
+    d[5..7].copy_from_slice(&w.to_le_bytes());
+    d[7..9].copy_from_slice(&h.to_le_bytes());
+    d[21..25].copy_from_slice(&default_interval.to_le_bytes());
+    d[25] = 2; // discrete intervals
+    d[26] = intervals.len() as u8;
+    for (i, interval) in intervals.iter().enumerate() {
+        let at = 27 + 4 * i;
+        d[at..at + 4].copy_from_slice(&interval.to_le_bytes());
+    }
+    d
+}
+
+/// A frame descriptor for one size that can be shot anywhere in a range of rates.
+fn range_frame(idx: u8, w: u16, h: u16, lo: u32, hi: u32) -> Vec<u8> {
+    let mut d = vec![0u8; 35];
+    d[0] = 35;
+    d[1] = 0x24;
+    d[2] = 0x07;
+    d[3] = idx;
+    d[5..7].copy_from_slice(&w.to_le_bytes());
+    d[7..9].copy_from_slice(&h.to_le_bytes());
+    let mid = (lo + hi) / 2;
+    d[21..25].copy_from_slice(&mid.to_le_bytes());
+    d[25] = 1; // a range
+    d[27..31].copy_from_slice(&lo.to_le_bytes());
+    d[31..35].copy_from_slice(&hi.to_le_bytes());
+    d
+}
+
+fn triples(modes: &[VideoMode]) -> Vec<(u32, u32, u32)> {
+    modes.iter().map(|m| (m.width, m.height, m.fps)).collect()
+}
+
+#[test]
+fn every_discrete_rate_of_every_size_is_listed() {
+    let alts = mjpeg_format(
+        1,
+        vec![
+            discrete_frame(1, 1920, 1080, 333333, &[333333, 500000, 166666]),
+            discrete_frame(2, 1280, 720, 333333, &[333333]),
+        ],
+    );
+    // Biggest picture first, fastest rate first inside a picture.
+    assert_eq!(
+        triples(&mjpeg_mode_list(&alts)),
+        vec![
+            (1920, 1080, 60),
+            (1920, 1080, 30),
+            (1920, 1080, 20),
+            (1280, 720, 30),
+        ]
+    );
+}
+
+#[test]
+fn the_cards_own_default_is_the_one_it_names() {
+    let alts = mjpeg_format(
+        2,
+        vec![
+            discrete_frame(1, 1920, 1080, 333333, &[333333]),
+            discrete_frame(2, 1280, 720, 166666, &[166666, 333333]),
+        ],
+    );
+    let modes = mjpeg_mode_list(&alts);
+    let defaults: Vec<_> = modes.iter().filter(|m| m.is_default).collect();
+    assert_eq!(defaults.len(), 1);
+    assert_eq!(
+        (defaults[0].width, defaults[0].height, defaults[0].fps),
+        (1280, 720, 60)
+    );
+    // The card's own default is what the card would start on, and it is the mode the
+    // camera path picks when the app asks for no size of its own.
+    let defaults2 = mjpeg_modes(&alts);
+    assert_eq!(default_mode(&defaults2), Some((1280, 720, 60)));
+}
+
+#[test]
+fn a_rate_the_card_ads_is_the_rate_the_card_is_asked_for() {
+    // 333667 in 100 ns units is 29.97 frames a second. libuvc matches a requested rate
+    // against a discrete interval with 10_000_000 / interval == fps, exactly, so the
+    // only rate that selects this interval is 29 - listing it as 30 would be refused.
+    let alts = mjpeg_format(1, vec![discrete_frame(1, 640, 480, 333667, &[333667])]);
+    assert_eq!(triples(&mjpeg_mode_list(&alts)), vec![(640, 480, 29)]);
+}
+
+#[test]
+fn a_rate_range_offers_its_default_and_its_two_ends() {
+    let alts = mjpeg_format(1, vec![range_frame(1, 1280, 720, 100000, 500000)]);
+    // 100000 = 100 fps, 500000 = 20 fps, and the midpoint 300000 = 33 fps.
+    assert_eq!(
+        triples(&mjpeg_mode_list(&alts)),
+        vec![(1280, 720, 100), (1280, 720, 33), (1280, 720, 20)]
+    );
+}
+
+#[test]
+fn the_same_size_and_rate_twice_is_one_entry() {
+    let alts = mjpeg_format(
+        1,
+        vec![
+            discrete_frame(1, 640, 480, 333333, &[333333, 500000]),
+            discrete_frame(2, 640, 480, 333333, &[500000, 333333]),
+        ],
+    );
+    assert_eq!(
+        triples(&mjpeg_mode_list(&alts)),
+        vec![(640, 480, 30), (640, 480, 20)]
+    );
+}
+
+#[test]
+fn no_mjpeg_format_means_no_modes() {
+    assert!(mjpeg_mode_list(&[]).is_empty());
+    let uncompressed = vec![RawAlt {
+        interface: 1,
+        alt: 0,
+        class: 14,
+        subclass: 2,
+        endpoints: vec![],
+        extra: vec![11, 0x24, 0x04, 1, 1, 1, 0, 0, 0, 0, 0],
+    }];
+    assert!(mjpeg_mode_list(&uncompressed).is_empty());
+}
+
+#[test]
+fn a_truncated_interval_list_does_not_panic() {
+    // Says three discrete intervals and then stops: the two that are there are real,
+    // the third is not invented.
+    let mut f = discrete_frame(1, 640, 480, 333333, &[333333, 500000]);
+    f[26] = 3; // one more than the descriptor carries
+    let alts = mjpeg_format(1, vec![f]);
+    assert_eq!(
+        triples(&mjpeg_mode_list(&alts)),
+        vec![(640, 480, 30), (640, 480, 20)]
+    );
+}
+
+#[test]
+fn a_zero_interval_is_not_a_rate() {
+    let mut f = discrete_frame(1, 640, 480, 0, &[0, 333333]);
+    f[21..25].copy_from_slice(&0u32.to_le_bytes());
+    let alts = mjpeg_format(1, vec![f]);
+    assert_eq!(triples(&mjpeg_mode_list(&alts)), vec![(640, 480, 30)]);
 }

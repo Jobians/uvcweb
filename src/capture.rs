@@ -50,28 +50,79 @@ unsafe fn device_ids(h: *mut UsbHandle) -> Option<(u16, u16)> {
     ))
 }
 
+/// libusb settings that have to be in place before `uvc_init`. A caller hands us
+/// the file descriptor of the card it already opened, so libusb must not go
+/// looking for devices of its own.
+unsafe fn before_uvc_init() {
+    let r = libusb_set_option(
+        std::ptr::null_mut(),
+        LIBUSB_OPTION_LOG_LEVEL,
+        LIBUSB_LOG_LEVEL_ERROR,
+    );
+    if r != 0 {
+        say!("warning: libusb log-level option failed: {}", usb_err(r));
+    }
+    let r = libusb_set_option(std::ptr::null_mut(), LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
+    if r != 0 {
+        say!(
+            "warning: libusb device-discovery option failed: {}",
+            usb_err(r)
+        );
+    }
+}
+
+/// What the card says it can do, asked by opening it, reading the configuration
+/// and closing it again. This is a question, not a session: nothing is streamed
+/// and nothing is left claimed, so the card can be opened for real straight
+/// afterwards. The card has to not be streaming at the time, or it cannot be
+/// opened a second time.
+///
+/// `Err` carries the same numbers as [`Capture::open`]: 1 = libusb would not
+/// start, 2 = the card would not open, 3 = the card's descriptors are
+/// unreadable or list no MJPEG mode at all.
+pub fn probe_modes(fd: i32) -> Result<Vec<descriptors::VideoMode>, i32> {
+    unsafe {
+        before_uvc_init();
+        let mut ctx: *mut UvcContext = std::ptr::null_mut();
+        let e = uvc_init(&mut ctx, std::ptr::null_mut());
+        if e < 0 {
+            say!("uvc_init failed: {}", uvc_err(e));
+            return Err(1);
+        }
+        let mut devh: *mut UvcDevHandle = std::ptr::null_mut();
+        let e = uvc_wrap(fd, ctx, &mut devh);
+        if e < 0 {
+            say!("uvc_wrap failed: {} (fd={})", uvc_err(e), fd);
+            uvc_exit(ctx);
+            return Err(2);
+        }
+        let usb = uvc_get_libusb_handle(devh);
+        let alts = match descriptors::read_active_config(usb) {
+            Ok(alts) => alts,
+            Err(e) => {
+                say!("{}", e);
+                uvc_close(devh);
+                uvc_exit(ctx);
+                return Err(3);
+            }
+        };
+        let modes = descriptors::mjpeg_mode_list(&alts);
+        uvc_close(devh);
+        uvc_exit(ctx);
+        if modes.is_empty() {
+            say!("the card lists no MJPEG mode (this program only handles MJPEG)");
+            return Err(3);
+        }
+        say!("the card lists {} video mode(s)", modes.len());
+        Ok(modes)
+    }
+}
+
 impl Capture {
     /// Open the card. On failure returns the process exit code (same numbers as the C version).
     pub fn open(cfg: &Config) -> Result<Capture, i32> {
         unsafe {
-            // Enable libusb debug logging.
-            let r = libusb_set_option(
-                std::ptr::null_mut(),
-                LIBUSB_OPTION_LOG_LEVEL,
-                LIBUSB_LOG_LEVEL_ERROR,
-            );
-            if r != 0 {
-                say!("warning: libusb log-level option failed: {}", usb_err(r));
-            }
-
-            // Don't let libusb rediscover devices; use the FD supplied by termux-usb.
-            let r = libusb_set_option(std::ptr::null_mut(), LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
-            if r != 0 {
-                say!(
-                    "warning: libusb device-discovery option failed: {}",
-                    usb_err(r)
-                );
-            }
+            before_uvc_init();
             let mut ctx: *mut UvcContext = std::ptr::null_mut();
             let e = uvc_init(&mut ctx, std::ptr::null_mut());
             if e < 0 {
@@ -151,7 +202,7 @@ impl Capture {
             if e < 0 {
                 uvc_print_diag(devh, std::ptr::null_mut());
                 say!("MJPEG {}x{} @ {} not accepted: {}", mw, mh, mf, uvc_err(e));
-                say!("pick a size from the list above and pass it with -w -h -f");
+                say!("pick a mode the card lists - from the app's mode list, or with -w -h -f");
                 uvc_close(devh);
                 uvc_exit(ctx);
                 return Err(3);

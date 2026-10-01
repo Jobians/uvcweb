@@ -51,7 +51,12 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 ## Use
 
 1. Plug the capture card into the phone (USB-C / OTG adapter) and open the app.
-2. Choose Web viewer and/or RTSP, ports, and the video mode (0 x 0 = the card's default).
+2. Choose Web viewer and/or RTSP, ports, and the video mode. The mode list is read from the card
+   itself, so it holds the sizes and rates that card says it can do, plus "Let the card choose"
+   (its own default) and a "Custom" entry for a card that lists something wrong. The list needs
+   USB permission for the card, which is also needed to stream: press **Detect modes** to be
+   asked for it, and from then on the list is filled in on its own whenever the app comes back
+   to the screen with the card plugged in and not streaming.
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
    On Android 9 and older it also asks for storage permission, which is only needed to put a finished
@@ -127,6 +132,12 @@ Send me the first error you get, plus the log shown in the app. Where trouble is
   block for JNI names. Its tests stand on a table built by hand, so an index that moves fails on a
   desktop rather than on a phone.
 * App: "could not open the capture card": permission dialog refused, or the card was unplugged.
+* App: `UnsatisfiedLinkError: no implementation of ... Native.listModes`: the installed
+  `libuvcweb_core.so` is older than the app. Run `./build-rust.sh` and install again; a new
+  native function cannot be added without rebuilding the library.
+* App: "the mode list is read from the card itself, so it can only be asked while it is not
+  streaming": that is not a fault, it is the rule - the card is opened to be asked and it can
+  only be opened once. Stop the camera and press **Detect modes** again.
 * App: "the record folder could not be used - see the log": the phone's storage is full, or the app's
   external folder is gone (moved to another card). The log line names the folder that failed. This is
   where a recording is written while it is being made; a finished one is published to

@@ -127,7 +127,7 @@ pub fn mjpeg_modes(alts: &[RawAlt]) -> Vec<MjpegMode> {
                         done = true; // only the first MJPEG format, like the C version
                     } else if d.len() >= 7 {
                         in_mjpeg = true;
-                        default_idx = d[6];
+                        default_idx = d[5]; // bDefaultFrameIndex, before the 16-byte guidFormat
                     }
                 }
                 0x04 | 0x10 => in_mjpeg = false, // uncompressed / frame based formats
@@ -160,6 +160,122 @@ pub fn default_mode(modes: &[MjpegMode]) -> Option<(u32, u32, u32)> {
     let fps = 10_000_000_u32.checked_div(m.interval).unwrap_or(30);
 
     Some((m.width, m.height, fps))
+}
+
+/// One picture size and rate the card says it can do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoMode {
+    pub width: u32,
+    pub height: u32,
+    /// The rate to ask the card for, in whole frames a second.
+    pub fps: u32,
+    /// This is the size and rate the card itself would start on.
+    pub is_default: bool,
+}
+
+/// Every size and rate the card's first MJPEG format says it can do, largest
+/// picture first and, within one size, the fastest rate first.
+///
+/// A frame descriptor names one size and either a list of frame intervals - the
+/// discrete rates the card can do at that size - or a range to pick from. A
+/// list is turned into one entry per interval. A range says nothing about which
+/// rates inside it work well, so its default and its two ends are offered and
+/// nothing else.
+///
+/// The rates are the ones to hand to `uvc_get_stream_ctrl_format_size`: that is
+/// `10_000_000 / interval`, the very division libuvc does to match a rate against
+/// a discrete interval, so a rate listed here is a rate the card will accept.
+/// A card advertising 29.97 as 333667 in 100 ns units is 29 here, and 29 is what
+/// selects it - rounding it to 30 would be refused.
+///
+/// The same size and rate listed by more than one frame descriptor is one entry.
+pub fn mjpeg_mode_list(alts: &[RawAlt]) -> Vec<VideoMode> {
+    let mut found: Vec<VideoMode> = Vec::new();
+    for a in alts.iter().filter(|a| a.class == 14 && a.subclass == 2) {
+        let mut in_mjpeg = false;
+        let mut done = false;
+        let mut default_idx = 0u8;
+        let mut modes: Vec<VideoMode> = Vec::new();
+        walk(&a.extra, |t, d| {
+            if t != 0x24 || d.len() < 4 || done {
+                return;
+            }
+            match d[2] {
+                0x06 => {
+                    if !modes.is_empty() {
+                        done = true; // only the first MJPEG format, as everywhere else here
+                    } else if d.len() >= 7 {
+                        in_mjpeg = true;
+                        default_idx = d[5];
+                    }
+                }
+                0x04 | 0x10 => in_mjpeg = false,
+                0x07 if in_mjpeg && d.len() >= 25 => {
+                    // VS_FRAME_MJPEG: one size, and how many ways to shoot it.
+                    let width = u16le(&d[5..7]);
+                    let height = u16le(&d[7..9]);
+                    let default_interval = u32le(&d[21..25]);
+                    let is_default = d[3] == default_idx;
+
+                    let mut intervals: Vec<u32> = Vec::new();
+                    if d.len() >= 31 && d[25] == 2 {
+                        // Discrete: the descriptor carries the whole list.
+                        for i in 0..d[26] as usize {
+                            let at = 27 + 4 * i;
+                            if at + 4 > d.len() {
+                                break;
+                            }
+                            intervals.push(u32le(&d[at..at + 4]));
+                        }
+                    }
+                    if intervals.is_empty() {
+                        // A range, or a descriptor that says nothing useful.
+                        intervals.push(default_interval);
+                        if d.len() >= 35 && d[25] == 1 {
+                            intervals.push(u32le(&d[27..31])); // fastest
+                            intervals.push(u32le(&d[31..35])); // slowest
+                        }
+                    }
+
+                    for interval in intervals {
+                        let fps = match 10_000_000_u32.checked_div(interval) {
+                            Some(f) if f > 0 => f,
+                            _ => continue, // a card that says zero cannot be taken at its word
+                        };
+                        modes.push(VideoMode {
+                            width,
+                            height,
+                            fps,
+                            is_default: is_default && interval == default_interval,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        });
+        if !modes.is_empty() {
+            found = modes;
+            break;
+        }
+    }
+
+    let mut out: Vec<VideoMode> = Vec::new();
+    for m in found {
+        match out
+            .iter_mut()
+            .find(|k| k.width == m.width && k.height == m.height && k.fps == m.fps)
+        {
+            Some(k) => k.is_default |= m.is_default,
+            None => out.push(m),
+        }
+    }
+    out.sort_by(|a, b| {
+        b.width
+            .cmp(&a.width)
+            .then(b.height.cmp(&a.height))
+            .then(b.fps.cmp(&a.fps))
+    });
+    out
 }
 
 // ------------------------------------------------------------------ audio

@@ -51,12 +51,16 @@ Then open the `android/` folder in Android Studio and press Run (a real phone; a
 ## Use
 
 1. Plug the capture card into the phone (USB-C / OTG adapter) and open the app.
-2. Choose Web viewer and/or RTSP, ports, and the video mode. The mode list is read from the card
-   itself, so it holds the sizes and rates that card says it can do, plus "Let the card choose"
-   (its own default) and a "Custom" entry for a card that lists something wrong. The list needs
-   USB permission for the card, which is also needed to stream: press **Detect modes** to be
-   asked for it, and from then on the list is filled in on its own whenever the app comes back
-   to the screen with the card plugged in and not streaming.
+2. Choose Web viewer and/or RTSP, ports, a **resolution** and a **frame rate**. Both lists are read
+   from the card itself, so they hold the sizes and the rates that card says it can do, plus
+   "Let the card choose" for the size (its own default) and a "Custom" entry for a card that lists
+   something wrong. The two are separate choices: any listed resolution can be paired with any
+   listed rate, and the line under them says what will be asked for. A card takes a size and a
+   rate together, so a pairing it never listed may be refused at Start - the line under the two
+   lists says so when that is the case. The lists need USB permission for the card, which is also
+   needed to stream: press **Detect modes** to be asked for it, and from then on they are filled
+   in on their own whenever the app comes back to the screen with the card plugged in and not
+   streaming.
 3. **Start.** Android asks for Camera and Microphone permission (it insists on them for USB video and
    audio devices even though the phone's own camera and mic are never used), then for USB access to the card.
    On Android 9 and older it also asks for storage permission, which is only needed to put a finished

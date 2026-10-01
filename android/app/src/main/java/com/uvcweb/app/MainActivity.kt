@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -47,8 +49,10 @@ class MainActivity : Activity() {
   private lateinit var mdnsNameEdit: EditText
   private lateinit var autoReconnectCheck: CheckBox
   private lateinit var audioCheck: CheckBox
-  private lateinit var modeLabel: TextView
-  private lateinit var modeSpinner: Spinner
+  private lateinit var resolutionLabel: TextView
+  private lateinit var resolutionSpinner: Spinner
+  private lateinit var fpsSpinner: Spinner
+  private lateinit var modeSummary: TextView
   private lateinit var customModeRow: View
   private lateinit var widthEdit: EditText
   private lateinit var heightEdit: EditText
@@ -66,28 +70,52 @@ class MainActivity : Activity() {
   private lateinit var logScroll: ScrollView
   private lateinit var clearLogButton: Button
 
-  /** One line of the video mode list. A width of 0 means "let the card decide". */
-  private class Mode(
+  /**
+   * One resolution the card lists. A width of 0 is the "let the card choose" entry, and
+   * [custom] is the hand-typed escape hatch for a card whose list is wrong.
+   */
+  private class Resolution(
     val width: Int,
     val height: Int,
-    val fps: Int,
-    val custom: Boolean,
-    /** The card named this as the one it would start on by itself. */
+    val custom: Boolean = false,
+    /** The card named this size as the one it would start on by itself. */
     val isDefault: Boolean = false,
   ) {
     val label: String
-      get() = when {
-        custom -> "Custom (type a size and rate)"
-        width == 0 -> "Let the card choose (its own default)"
+      get() {
         // Locale.US, so a phone set to a language that groups digits does not turn
         // 1920 into "1.920".
-        isDefault -> "%d x %d @ %d fps  -  the card's default".format(Locale.US, width, height, fps)
-        else -> "%d x %d @ %d fps".format(Locale.US, width, height, fps)
+        val size = "%d x %d".format(Locale.US, width, height)
+        return when {
+          custom -> "Custom (type a size and rate)"
+          width == 0 -> "Let the card choose (its own default)"
+          isDefault -> "$size  -  the card's default"
+          else -> size
+        }
       }
   }
 
-  /** What the spinner is showing, in the same order. */
-  private var modeList: List<Mode> = emptyList()
+  /**
+   * One frame rate the card lists, in whole frames a second. A rate of 0 is the
+   * placeholder shown before the card has been asked, and means "whatever the engine
+   * falls back to" - which is why it is not the same as an offered rate.
+   */
+  private class Rate(val fps: Int, val isDefault: Boolean = false) {
+    val label: String
+      get() = when {
+        fps == 0 -> "not read from the card yet"
+        isDefault -> "%d fps  -  the card's default".format(Locale.US, fps)
+        else -> "%d fps".format(Locale.US, fps)
+      }
+  }
+
+  /** One size-and-rate the card listed, kept so an unlisted pair can be recognised. */
+  private class Detected(val width: Int, val height: Int, val fps: Int, val isDefault: Boolean)
+
+  /** What the two spinners are showing, in the same order. */
+  private var resolutionList: List<Resolution> = emptyList()
+  private var rateList: List<Rate> = emptyList()
+  private var detectedList: List<Detected> = emptyList()
 
   /** True while a probe is in flight, so the card is not opened twice at once. */
   @Volatile private var modesProbing = false
@@ -149,8 +177,10 @@ class MainActivity : Activity() {
     mdnsNameEdit = findViewById(R.id.mdnsNameEdit)
     autoReconnectCheck = findViewById(R.id.autoReconnectCheck)
     audioCheck = findViewById(R.id.audioCheck)
-    modeLabel = findViewById(R.id.modeLabel)
-    modeSpinner = findViewById(R.id.modeSpinner)
+    resolutionLabel = findViewById(R.id.resolutionLabel)
+    resolutionSpinner = findViewById(R.id.resolutionSpinner)
+    fpsSpinner = findViewById(R.id.fpsSpinner)
+    modeSummary = findViewById(R.id.modeSummary)
     customModeRow = findViewById(R.id.customModeRow)
     widthEdit = findViewById(R.id.widthEdit)
     heightEdit = findViewById(R.id.heightEdit)
@@ -167,13 +197,30 @@ class MainActivity : Activity() {
 
     showSettings(Settings.load(this))
 
-    modeSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+    val onPicked = object : AdapterView.OnItemSelectedListener {
       override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
         showSelectedMode()
       }
 
       override fun onNothingSelected(parent: AdapterView<*>?) {}
     }
+    resolutionSpinner.onItemSelectedListener = onPicked
+    fpsSpinner.onItemSelectedListener = onPicked
+
+    // The summary line has to follow a hand-typed mode as it is typed, or it would
+    // still be describing the last one while the fields show something else.
+    val typed = object : TextWatcher {
+      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+
+      override fun afterTextChanged(s: Editable?) {
+        if (customModeRow.visibility == View.VISIBLE) showSelectedMode()
+      }
+    }
+    widthEdit.addTextChangedListener(typed)
+    heightEdit.addTextChangedListener(typed)
+    fpsEdit.addTextChangedListener(typed)
     detectModesButton.setOnClickListener {
       probeModes(asked = true)
     }
@@ -248,15 +295,22 @@ class MainActivity : Activity() {
     widthEdit.setText(s.width.toString())
     heightEdit.setText(s.height.toString())
     fpsEdit.setText(s.fps.toString())
-    // Until the card has said what it can do, the list holds the card's own default and
-    // the custom entry; the saved size is what the list is matched against when it arrives.
-    showModeList(listOf(Mode(0, 0, 0, custom = false), Mode(0, 0, 0, custom = true)), s.width, s.height, s.fps)
+    // Until the card has said what it can do, the lists hold the card's own default and
+    // the custom entry; the saved size and rate are what they are matched against once
+    // the real list arrives.
+    showModes(
+        listOf(Resolution(0, 0), Resolution(0, 0, custom = true)),
+        listOf(Rate(0)),
+        emptyList(),
+        s.width, s.height, s.fps,
+    )
   }
 
   private fun readSettings(): Settings {
     val d = Settings()
-    val mode = selectedMode()
+    val mode = selectedResolution()
     val custom = mode?.custom == true
+    val rate = if (custom) (fpsEdit.text.toString().toIntOrNull() ?: 0) else (selectedRate()?.fps ?: 0)
     return Settings(
       web = webCheck.isChecked,
       webPort = webPortEdit.text.toString().toIntOrNull() ?: d.webPort,
@@ -274,55 +328,100 @@ class MainActivity : Activity() {
       // typed, so a card that will not take it says so instead of being second-guessed.
       width = if (custom) (widthEdit.text.toString().toIntOrNull() ?: 0) else (mode?.width ?: 0),
       height = if (custom) (heightEdit.text.toString().toIntOrNull() ?: 0) else (mode?.height ?: 0),
-      fps = if (custom) (fpsEdit.text.toString().toIntOrNull() ?: 0) else (mode?.fps ?: 0),
+      fps = rate,
     )
   }
 
-  // ------------------------------------------------------------------ video mode list
+  // ------------------------------------------------------------------ video mode
 
-  /** The entry the spinner is on, or null if the list is empty. */
-  private fun selectedMode(): Mode? = modeList.getOrNull(modeSpinner.selectedItemPosition)
+  /** The resolution entry the spinner is on, or null if the list is empty. */
+  private fun selectedResolution(): Resolution? =
+      resolutionList.getOrNull(resolutionSpinner.selectedItemPosition)
+
+  /** The rate entry the spinner is on, or null if the list is empty. */
+  private fun selectedRate(): Rate? = rateList.getOrNull(fpsSpinner.selectedItemPosition)
 
   /**
-   * Fills the mode list and puts the spinner on the entry for [width]/[height]/[fps],
-   * so a choice survives the list being asked for again - and a size the card does not
-   * list falls back to the card's own default instead of being silently kept.
-   * [keepCustom] keeps a hand-typed mode on the custom entry, which the search above
-   * cannot match against the card's own list.
+   * Fills both lists and puts each one on the entry the saved settings ask for, when
+   * the card offers it - so a choice survives the list being asked for again, and a
+   * size or rate the card does not list falls back to the first entry instead of
+   * being silently kept.
+   *
+   * The two are chosen independently, which is the point: any listed resolution can be
+   * paired with any listed rate. [found] is the card's own list of size-and-rate pairs,
+   * kept so [showSelectedMode] can say when a pairing was never offered.
    */
-  private fun showModeList(
-    modes: List<Mode>,
+  private fun showModes(
+    resolutions: List<Resolution>,
+    rates: List<Rate>,
+    found: List<Detected>,
     width: Int,
     height: Int,
     fps: Int,
-    keepCustom: Boolean = false,
   ) {
-    modeList = modes
-    val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modes.map { it.label })
-    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-    modeSpinner.adapter = adapter
+    resolutionList = resolutions
+    rateList = rates
+    detectedList = found
 
-    val wanted = modes.indexOfFirst {
-      !it.custom && it.width == width && it.height == height && it.fps == fps
+    resolutionSpinner.adapter = spinnerAdapter(resolutions.map { it.label })
+    fpsSpinner.adapter = spinnerAdapter(rates.map { it.label })
+
+    val wantedResolution = resolutions.indexOfFirst {
+      !it.custom && it.width == width && it.height == height
     }
-    modeSpinner.setSelection(
-        if (wanted >= 0) wanted
-        else if (keepCustom) modes.indexOfFirst { it.custom }
-        else 0,
-        false,
-    )
-    modeLabel.text = "Video mode"
+    resolutionSpinner.setSelection(if (wantedResolution >= 0) wantedResolution else 0, false)
+
+    val wantedRate = rates.indexOfFirst { it.fps == fps }
+    fpsSpinner.setSelection(if (wantedRate >= 0) wantedRate else 0, false)
+
+    resolutionLabel.text = "Resolution"
     showSelectedMode()
   }
 
-  /** The manual size fields are only shown when they are the one being used. */
-  private fun showSelectedMode() {
-    val custom = selectedMode()?.custom == true
-    customModeRow.visibility = if (custom) View.VISIBLE else View.GONE
+  private fun spinnerAdapter(labels: List<String>): ArrayAdapter<String> {
+    val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+    adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+    return adapter
   }
 
   /**
-   * Asks the card which sizes and rates it can do, and lists them.
+   * Says what the two spinners add up to, which is the one line that matters: the
+   * card takes a size and a rate together, so a pairing it never listed is very likely
+   * to be refused, and that is worth saying before Start is pressed rather than after.
+   *
+   * It also shows the manual size fields, which only apply while "Custom" is chosen -
+   * until then the two spinners are the whole of the choice.
+   */
+  private fun showSelectedMode() {
+    val custom = selectedResolution()?.custom == true
+    customModeRow.visibility = if (custom) View.VISIBLE else View.GONE
+    resolutionSpinner.isEnabled = !custom
+    fpsSpinner.isEnabled = !custom
+
+    val resolution = selectedResolution()
+    val rate = selectedRate()
+    val size = when {
+      custom -> "%s x %s".format(
+          widthEdit.text.toString().ifEmpty { "?" },
+          heightEdit.text.toString().ifEmpty { "?" },
+      )
+      resolution == null || resolution.width == 0 -> "the card's own size"
+      else -> "%d x %d".format(Locale.US, resolution.width, resolution.height)
+    }
+    val frames = when {
+      custom -> fpsEdit.text.toString().ifEmpty { "?" } + " fps"
+      rate == null || rate.fps == 0 ->
+          if (resolution?.width == 0) "its own rate" else "30 fps (this app's fallback)"
+      else -> "%d fps".format(Locale.US, rate.fps)
+    }
+    val unlisted = !custom && resolution != null && resolution.width > 0 && rate != null && rate.fps > 0 &&
+        detectedList.none { it.width == resolution.width && it.height == resolution.height && it.fps == rate.fps }
+    modeSummary.text = "MJPEG $size @ $frames" +
+        if (unlisted) "\nthe card does not list that size at that rate - it may refuse to start" else ""
+  }
+
+  /**
+   * Asks the card which sizes and rates it can do, and lists each of them.
    *
    * The card has to be opened to be asked, and it can only be opened when nothing is
    * streaming from it - so this is skipped while the camera runs, and a probe asked for
@@ -364,15 +463,16 @@ class MainActivity : Activity() {
     }
 
     modesProbing = true
-    modeLabel.text = "Video mode (asking the card...)"
+    resolutionLabel.text = "Resolution (asking the card...)"
     Thread {
-      var found: List<Mode> = emptyList()
+      var found: List<Detected> = emptyList()
       var problem: String? = null
       try {
         val conn = usb.openDevice(device)
         try {
-          // Four numbers per mode, and the card is asked again with a longer array if
-          // this one turns out to be too short. 256 modes is far more than any card lists.
+          // Four numbers per size-and-rate the card listed, and it is asked again with a
+          // longer array if this one turns out to be too short. 256 is far more than any
+          // card lists.
           var longs = 64
           while (longs <= 1024) {
             val into = LongArray(longs)
@@ -381,11 +481,10 @@ class MainActivity : Activity() {
               found = ArrayList(count)
               for (i in 0 until count) {
                 found.add(
-                    Mode(
+                    Detected(
                         width = into[i * 4].toInt(),
                         height = into[i * 4 + 1].toInt(),
                         fps = into[i * 4 + 2].toInt(),
-                        custom = false,
                         isDefault = into[i * 4 + 3] == 1L,
                     )
                 )
@@ -406,7 +505,7 @@ class MainActivity : Activity() {
             longs *= 4
           }
           if (found.isEmpty() && problem == null) {
-            problem = "the card's list of sizes did not fit in ${longs} numbers"
+            problem = "the card's list of sizes did not fit in $longs numbers"
           }
         } finally {
           conn.close()
@@ -423,25 +522,47 @@ class MainActivity : Activity() {
             Util.appendLog(this, "no mode list: $message")
             if (asked) toast(message)
           }
-          modeLabel.text = "Video mode (not read from the card - press Detect modes)"
+          resolutionLabel.text = "Resolution (not read from the card - press Detect modes)"
           return@onMain
         }
         // The card's own default comes first, so a card that offers nothing useful still
         // leaves a choice that works; the custom entry is the way out of a card whose
         // list is wrong.
-        val list = ArrayList<Mode>(modes.size + 2)
-        list.add(Mode(0, 0, 0, custom = false))
-        list.addAll(modes)
-        list.add(Mode(0, 0, 0, custom = true))
+        val own = modes.firstOrNull { it.isDefault }
+        val resolutions = ArrayList<Resolution>()
+        resolutions.add(Resolution(0, 0))
+        val seenSizes = HashSet<Pair<Int, Int>>()
+        for (m in modes) {
+          if (seenSizes.add(m.width to m.height)) {
+            resolutions.add(
+                Resolution(m.width, m.height, isDefault = own?.width == m.width && own?.height == m.height)
+            )
+          }
+        }
+        resolutions.add(Resolution(0, 0, custom = true))
+
+        // The rates on their own, fastest first. Every rate the card listed at any size
+        // is offered at every size, which is what makes the two choices independent.
+        val rates = ArrayList<Rate>()
+        val seenRates = HashSet<Int>()
+        for (m in modes.sortedByDescending { it.fps }) {
+          if (seenRates.add(m.fps)) {
+            rates.add(Rate(m.fps, isDefault = own?.fps == m.fps))
+          }
+        }
+
         val wanted = readSettings()
-        showModeList(list, wanted.width, wanted.height, wanted.fps, keepCustom = selectedMode()?.custom == true)
-        val defaults = modes.filter { it.isDefault }
+        showModes(resolutions, rates, modes, wanted.width, wanted.height, wanted.fps)
         Util.appendLog(
             this,
-            "the card lists ${modes.size} size(s): " +
+            "the card lists ${modes.size} size-and-rate combination(s): " +
                 modes.joinToString(", ") { "${it.width}x${it.height}@${it.fps}" } +
-                if (defaults.isEmpty()) ", and names none of them as its own default"
-                else ", its own default is ${defaults[0].width} x ${defaults[0].height} @ ${defaults[0].fps} fps"
+                (if (own == null) ", and names none of them as its own default"
+                else ", its own default is ${own.width} x ${own.height} @ ${own.fps} fps"),
+        )
+        Util.appendLog(
+            this,
+            "showing ${resolutions.size - 2} resolution(s) and ${rates.size} rate(s) as separate choices",
         )
       }
     }.start()

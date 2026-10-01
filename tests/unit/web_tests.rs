@@ -64,6 +64,7 @@ impl Server {
             protocols: vec![],
             av_offset_ms: 0,
             record_dir: record_dir.to_string(),
+            list_modes: false,
         });
         Web.start(Ctx {
             hub: hub.clone(),

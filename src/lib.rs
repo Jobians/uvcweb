@@ -32,6 +32,14 @@ pub mod jnitable;
 pub mod protocols;
 pub mod recorder;
 
+/// The size-and-rate combinations a capture card advertises, read from its USB
+/// descriptors. Shared by the Termux program (`uvcweb --list-modes`) and the Android
+/// app (through the JNI entry points in `android.rs`).
+pub mod modes {
+    pub use crate::capture::probe_modes;
+    pub use crate::descriptors::VideoMode;
+}
+
 mod capture;
 mod descriptors;
 mod ffi;

@@ -8,7 +8,7 @@ use std::os::raw::c_int;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uvcweb_core::engine::Engine;
-use uvcweb_core::{config, say};
+use uvcweb_core::{config, modes, say};
 
 static CLI_STOP: AtomicBool = AtomicBool::new(false);
 
@@ -44,6 +44,10 @@ fn real_main() -> i32 {
     };
     install_signals();
 
+    if cfg.list_modes {
+        return list_modes(cfg.fd);
+    }
+
     let engine = match Engine::start(cfg) {
         Ok(e) => e,
         Err(code) => return code,
@@ -55,4 +59,43 @@ fn real_main() -> i32 {
     engine.stop();
     say!("bye");
     0
+}
+
+/// The `--list-modes` action: ask the card what it can do and print it. The card is
+/// opened, read and closed again, so nothing is streamed and it can be started on
+/// straight afterwards. This is the same detection the Android app uses.
+fn list_modes(fd: i32) -> i32 {
+    match modes::probe_modes(fd) {
+        Ok(found) => {
+            println!("the card lists {} MJPEG mode(s):", found.len());
+            for m in &found {
+                println!(
+                    "  {}x{} @ {} fps{}",
+                    m.width,
+                    m.height,
+                    m.fps,
+                    if m.is_default {
+                        "  (the card's own default)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            0
+        }
+        Err(code) => {
+            eprintln!("cannot read the card's modes: {}", probe_error(code));
+            code
+        }
+    }
+}
+
+/// The three numbers [`modes::probe_modes`] can fail with (see its documentation).
+fn probe_error(code: i32) -> &'static str {
+    match code {
+        1 => "libuvc would not start",
+        2 => "the card would not open (it may already be streaming)",
+        3 => "the card's descriptors list no MJPEG mode",
+        _ => "unknown error",
+    }
 }

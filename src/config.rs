@@ -15,6 +15,7 @@ pub struct Config {
     pub protocols: Vec<(String, u16)>, // chosen protocols with their ports
     pub av_offset_ms: i32,             // RTSP: shift video timestamps later (+) / earlier (-)
     pub record_dir: String,            // where the recorder puts its files; empty = its own default
+    pub list_modes: bool,              // print the MJPEG modes the card lists and exit
 }
 
 impl Config {
@@ -35,6 +36,7 @@ impl Config {
             // Empty, not "record": the recorder resolves its default later, so that
             // UVCWEB_RECORD_DIR still applies unless -R names a folder.
             record_dir: String::new(),
+            list_modes: false,
         }
     }
 }
@@ -44,6 +46,7 @@ pub fn usage() -> String {
     s.push_str("usage: termux-usb -r -e \"./uvcweb [options]\" DEVICE\n\n");
     s.push_str("video / audio:\n");
     s.push_str("  -w W -h H -f FPS   MJPEG mode (default: the card's own default mode)\n");
+    s.push_str("  --list-modes       print the MJPEG modes the card lists, then exit\n");
     s.push_str(
         "  -a usb|off         audio from the card's USB audio interface (default) or none\n",
     );
@@ -120,6 +123,7 @@ pub fn parse(args: &[String]) -> Result<Config, String> {
                 cfg.record_dir = v.to_string();
             }
             "-l" => cfg.lan = true,
+            "--list-modes" => cfg.list_modes = true,
             "-a" => {
                 let v = take(args, &mut i, last, a)?;
                 match v {

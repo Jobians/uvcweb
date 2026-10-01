@@ -1,5 +1,7 @@
 # Runs on every push and pull request: builds the Rust crate for Linux (fast, no NDK needed)
-# and runs the test suite from README.md ("cargo test", 24 tests, none touch real USB hardware).
+# and runs the test suite from README.md ("cargo test", 91 tests, none touch real USB hardware).
+# The mode-detection code is a shared library API (used by `uvcweb --list-modes` and the
+# Android JNI), so the Linux build genuinely compiles and lints it too.
 name: CI
 
 on:

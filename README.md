@@ -24,7 +24,7 @@ Linux binary. See `.github/workflows/release.yml`.
 
     pkg install rust clang libuvc libusb
     cargo build --release          # links the libusb/libuvc you just installed; do not add --features android-static, that's for the Android build only (see android/README.md)
-    cargo test              # optional: 80 tests, none need USB hardware
+    cargo test              # optional: 91 tests, none need USB hardware
 
 Needs Rust 1.70 or newer.
 
@@ -33,12 +33,14 @@ Needs Rust 1.70 or newer.
     termux-usb -r -e "./target/release/uvcweb -w 640 -h 480 -f 30" /dev/bus/usb/001/002              # web viewer (like the C version)
     termux-usb -r -e "./target/release/uvcweb -w 640 -h 480 -f 30 -P rtsp" /dev/bus/usb/001/002      # RTSP only
     termux-usb -r -e "./target/release/uvcweb -w 640 -h 480 -f 30 -P web,rtsp -l" /dev/bus/usb/001/002   # both, reachable from the LAN
+    termux-usb -r -e "./target/release/uvcweb --list-modes" /dev/bus/usb/001/002              # print what the card can do, then exit
 
 Old command lines keep working (`-a usb`, `-p 8081`, ...). `--help` lists everything.
 
 | option | meaning |
 |---|---|
 | `-w W -h H -f FPS` | MJPEG mode (default: the card's own default) |
+| `--list-modes` | print the sizes and rates the card advertises (the same list the Android app shows), then exit |
 | `-a usb` / `-a off` | audio from the card (default) / no audio |
 | `-ar RATE -ac CH` | preferred audio format; the card's own values win |
 | `-P web,rtsp` | which protocols to serve (default `web`) |

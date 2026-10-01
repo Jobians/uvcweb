@@ -30,6 +30,14 @@ fn several_protocols_and_ports() {
 }
 
 #[test]
+fn list_modes_is_recognized() {
+    let c = parse(&a("uvcweb --list-modes 7")).unwrap();
+    assert!(c.list_modes);
+    assert_eq!(c.fd, 7);
+    assert!(!parse(&a("uvcweb -w 640 -h 480 7")).unwrap().list_modes);
+}
+
+#[test]
 fn old_command_lines_still_work() {
     let c = parse(&a("uvcweb -w 640 -h 480 -f 30 -a usb 7")).unwrap();
     assert!(c.audio);
